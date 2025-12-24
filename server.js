@@ -10,7 +10,7 @@ let aircraftMap = new Map();
 let subscribers = [];
 
 // 1. RECEIVE DATA (From Tampermonkey)
-app.post("/api/data", (req, res) => {
+app.post("/api/atc/position", (req, res) => {
   const data = req.body;
   
   // Update the map (ensure aircraft has an ID)
