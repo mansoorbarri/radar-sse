@@ -66,7 +66,7 @@ app.get("/api/stream", (req, res) => {
 
 setInterval(() => {
   const now = Date.now();
-  const timeout = 60000;
+  const timeout = 2000;
   let removedAny = false;
 
   for (const [id, aircraft] of aircraftMap.entries()) {
