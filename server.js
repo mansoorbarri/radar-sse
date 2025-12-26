@@ -131,17 +131,15 @@ app.get("/api/stream", (req, res) => {
 
 setInterval(() => {
   const now = Date.now();
-  let removed = false;
   for (const [id, aircraft] of aircraftMap.entries()) {
     if (now - (aircraft.ts || 0) > 12000) {
+      console.log(`[TIMEOUT] ${id} timed out. Active sessions: ${flightSessions.has(id)}`);
       if (flightSessions.has(id)) {
         finalizeFlight(id);
       }
       aircraftMap.delete(id);
-      removed = true;
     }
   }
-  if (removed) broadcast();
 }, 5000);
 
 app.listen(process.env.PORT || 3001, "0.0.0.0");
