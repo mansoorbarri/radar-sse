@@ -10,6 +10,7 @@ app.use(express.json());
 
 let aircraftMap = new Map();
 let subscribers = [];
+let flightSessions = new Map();
 
 function broadcast() {
   const message = JSON.stringify({
@@ -20,11 +21,38 @@ function broadcast() {
   subscribers.forEach((s) => s.res.write(`data: ${message}\n\n`));
 }
 
+async function finalizeFlight(id) {
+  const session = flightSessions.get(id);
+  if (!session) return;
+
+  try {
+    if (session.coords.length > 2) {
+      await prisma.flight.create({
+        data: {
+          userId: session.userId,
+          callsign: session.callsign,
+          aircraftType: session.aircraftType,
+          departure: session.departure,
+          arrival: session.arrival,
+          path: session.coords,
+          startTime: session.startTime,
+          endTime: new Date(),
+        },
+      });
+    }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    flightSessions.delete(id);
+  }
+}
+
 app.post("/api/atc/position", async (req, res) => {
   const data = req.body;
   if (data.id) {
     let role = "FREE";
     let airlineLogo = null;
+    let userId = null;
 
     if (data.googleId) {
       try {
@@ -33,10 +61,34 @@ app.post("/api/atc/position", async (req, res) => {
         });
         if (user) {
           role = user.role;
-          airlineLogo = user.airlineLogo; // Optional
+          airlineLogo = user.airlineLogo;
+          userId = user.id;
         }
       } catch (e) {
-        console.error("DB Error:", e);
+        console.error(e);
+      }
+    }
+
+    if (role === "PREMIUM" && userId) {
+      if (!flightSessions.has(data.id)) {
+        flightSessions.set(data.id, {
+          userId: userId,
+          callsign: data.callsign || "Unknown",
+          aircraftType: data.type || "Unknown",
+          departure: data.departure || "???",
+          arrival: data.arrival || "???",
+          coords: [[data.lat, data.lon]],
+          startTime: new Date(),
+        });
+      } else {
+        let session = flightSessions.get(data.id);
+        const last = session.coords[session.coords.length - 1];
+        if (
+          Math.abs(last[0] - data.lat) > 0.0002 ||
+          Math.abs(last[1] - data.lon) > 0.0002
+        ) {
+          session.coords.push([data.lat, data.lon]);
+        }
       }
     }
 
@@ -75,7 +127,10 @@ setInterval(() => {
   const now = Date.now();
   let removed = false;
   for (const [id, aircraft] of aircraftMap.entries()) {
-    if (now - (aircraft.ts || 0) > 10000) {
+    if (now - (aircraft.ts || 0) > 12000) {
+      if (flightSessions.has(id)) {
+        finalizeFlight(id);
+      }
       aircraftMap.delete(id);
       removed = true;
     }
