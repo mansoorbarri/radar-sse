@@ -56,16 +56,22 @@ app.post("/api/atc/position", async (req, res) => {
 
     if (data.googleId) {
       try {
+        const searchId = String(data.googleId);
         const user = await prisma.user.findUnique({
-          where: { googleId: String(data.googleId) },
+          where: { googleId: searchId },
         });
+
         if (user) {
           role = user.role;
-          airlineLogo = user.airlineLogo;
           userId = user.id;
+          // LOG 1: Confirm user is found and role is correct
+          console.log(`[AUTH] Found ${user.username} | Role: ${role} | ID: ${userId}`);
+        } else {
+          // LOG 2: If this triggers, your DB googleId doesn't match the GeoFS one
+          console.log(`[AUTH] No user found for ID: ${searchId}`);
         }
       } catch (e) {
-        console.error(e);
+        console.error("[DB ERROR]", e);
       }
     }
 
