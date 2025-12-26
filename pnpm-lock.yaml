@@ -17,6 +17,7 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
+    devDependencies:
       prisma:
         specifier: ^6.5.0
         version: 6.19.1
