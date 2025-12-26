@@ -1,16 +1,12 @@
 const express = require("express");
 const cors = require("cors");
+const { PrismaClient } = require("@prisma/client");
+
 const app = express();
+const prisma = new PrismaClient();
 
 app.use(cors());
 app.use(express.json());
-
-app.use((err, req, res, next) => {
-  if (err.type === "aborted") {
-    return res.status(400).end();
-  }
-  next(err);
-});
 
 let aircraftMap = new Map();
 let subscribers = [];
@@ -24,12 +20,30 @@ function broadcast() {
   subscribers.forEach((s) => s.res.write(`data: ${message}\n\n`));
 }
 
-app.post("/api/atc/position", (req, res) => {
+app.post("/api/atc/position", async (req, res) => {
   const data = req.body;
   if (data.id) {
+    let role = "FREE";
+    let airlineLogo = null;
+
+    if (data.googleId) {
+      try {
+        const user = await prisma.user.findUnique({
+          where: { googleId: String(data.googleId) },
+        });
+        if (user) {
+          role = user.role;
+          airlineLogo = user.airlineLogo; // Optional
+        }
+      } catch (e) {
+        console.error("DB Error:", e);
+      }
+    }
+
     aircraftMap.set(data.id, {
       ...data,
-      lastSeen: new Date().toISOString(),
+      role,
+      airlineLogo,
       ts: Date.now(),
     });
     broadcast();
@@ -39,47 +53,34 @@ app.post("/api/atc/position", (req, res) => {
 
 app.get("/api/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
 
-  const initialMessage = JSON.stringify({
+  const initial = JSON.stringify({
     count: aircraftMap.size,
     aircraft: Array.from(aircraftMap.values()),
-    timestamp: new Date().toISOString(),
   });
-  res.write(`data: ${initialMessage}\n\n`);
+  res.write(`data: ${initial}\n\n`);
 
   const id = Date.now();
-  const newSubscriber = { id, res };
-  subscribers.push(newSubscriber);
-
-  const heartbeat = setInterval(() => {
-    res.write(": heartbeat\n\n");
-  }, 3500);
+  subscribers.push({ id, res });
 
   req.on("close", () => {
-    clearInterval(heartbeat);
     subscribers = subscribers.filter((s) => s.id !== id);
   });
 });
 
 setInterval(() => {
   const now = Date.now();
-  const timeout = 2000;
-  let removedAny = false;
-
+  let removed = false;
   for (const [id, aircraft] of aircraftMap.entries()) {
-    if (now - (aircraft.ts || 0) > timeout) {
+    if (now - (aircraft.ts || 0) > 10000) {
       aircraftMap.delete(id);
-      removedAny = true;
+      removed = true;
     }
   }
+  if (removed) broadcast();
+}, 5000);
 
-  if (removedAny) {
-    broadcast();
-  }
-}, 30000);
-
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, "0.0.0.0", () => console.log(`Radar backend on port ${PORT}`));
+app.listen(process.env.PORT || 3001, "0.0.0.0");
