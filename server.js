@@ -65,7 +65,7 @@ app.post("/api/atc/position", async (req, res) => {
           role = user.role;
           userId = user.id;
           console.log(
-            `[AUTH] Found ${user.username} | Role: ${role} | ID: ${userId}`
+            `[AUTH] Found ${user.clerkId} | Role: ${role} | ID: ${userId}`
           );
         } else {
           // Explicitly default to FREE when user not found
