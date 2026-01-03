@@ -50,7 +50,7 @@ async function finalizeFlight(id) {
 app.post("/api/atc/position", async (req, res) => {
   const data = req.body;
   if (data.id) {
-    let role = "FREE";
+    let role = "FREE"; // Default to FREE
     let airlineLogo = null;
     let userId = null;
 
@@ -64,14 +64,20 @@ app.post("/api/atc/position", async (req, res) => {
         if (user) {
           role = user.role;
           userId = user.id;
-          // LOG 1: Confirm user is found and role is correct
-          console.log(`[AUTH] Found ${user.username} | Role: ${role} | ID: ${userId}`);
+          console.log(
+            `[AUTH] Found ${user.username} | Role: ${role} | ID: ${userId}`
+          );
         } else {
-          // LOG 2: If this triggers, your DB googleId doesn't match the GeoFS one
-          console.log(`[AUTH] No user found for ID: ${searchId}`);
+          // Explicitly default to FREE when user not found
+          role = "FREE";
+          console.log(
+            `[AUTH] No user found for ID: ${searchId} - defaulting to FREE`
+          );
         }
       } catch (e) {
-        console.error("[DB ERROR]", e);
+        // On DB error, also default to FREE
+        role = "FREE";
+        console.error("[DB ERROR] Defaulting to FREE role:", e);
       }
     }
 
