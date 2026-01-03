@@ -81,7 +81,7 @@ app.post("/api/atc/position", async (req, res) => {
       }
     }
 
-    if (role === "PREMIUM" && userId) {
+    if (role === "PRO" && userId) {
       if (!flightSessions.has(data.id)) {
         flightSessions.set(data.id, {
           userId: userId,
