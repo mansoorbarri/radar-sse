@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { ConvexHttpClient } = require("convex/browser");
@@ -18,6 +19,7 @@ app.use(express.json());
 let aircraftMap = new Map();
 let subscribers = [];
 let flightSessions = new Map();
+let commandQueue = new Map(); // Stores pending commands per aircraft: id -> [commands]
 
 function broadcast() {
   const message = JSON.stringify({
@@ -140,6 +142,58 @@ app.get("/api/stream", (req, res) => {
   });
 });
 
+// Send command to an aircraft (called from RadarThing web app)
+app.post("/api/command", (req, res) => {
+  const { targetId, targetCallsign, targetGoogleId, command } = req.body;
+
+  if (!command || !command.type) {
+    return res.status(400).json({ error: "Missing command or command.type" });
+  }
+
+  // Find the aircraft by id, callsign, or googleId
+  let aircraftId = targetId;
+  if (!aircraftId) {
+    for (const [id, aircraft] of aircraftMap.entries()) {
+      if (
+        (targetCallsign && aircraft.callsign === targetCallsign) ||
+        (targetGoogleId && aircraft.googleId === targetGoogleId)
+      ) {
+        aircraftId = id;
+        break;
+      }
+    }
+  }
+
+  if (!aircraftId) {
+    return res.status(404).json({ error: "Aircraft not found" });
+  }
+
+  // Add command to queue
+  const commands = commandQueue.get(aircraftId) || [];
+  commands.push({
+    ...command,
+    ts: Date.now(),
+  });
+  commandQueue.set(aircraftId, commands);
+
+  console.log(`[CMD] Queued ${command.type} for ${aircraftId}`);
+  res.json({ success: true, queueLength: commands.length });
+});
+
+// Fetch pending commands for an aircraft (called from userscript)
+app.get("/api/commands/:id", (req, res) => {
+  const { id } = req.params;
+  const commands = commandQueue.get(id) || [];
+
+  // Clear the queue after fetching
+  if (commands.length > 0) {
+    commandQueue.delete(id);
+    console.log(`[CMD] Delivered ${commands.length} commands to ${id}`);
+  }
+
+  res.json({ commands });
+});
+
 setInterval(() => {
   const now = Date.now();
   for (const [id, aircraft] of aircraftMap.entries()) {
@@ -151,8 +205,11 @@ setInterval(() => {
         finalizeFlight(id);
       }
       aircraftMap.delete(id);
+      commandQueue.delete(id); // Clean up stale commands
     }
   }
 }, 5000);
 
-app.listen(process.env.PORT || 3001, "0.0.0.0");
+app.listen(process.env.PORT || 3001, "0.0.0.0", () => {
+  console.log(`[SSE Server] Running on http://localhost:${process.env.PORT || 3001}`);
+});
