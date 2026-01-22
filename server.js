@@ -88,7 +88,8 @@ app.post("/api/atc/position", async (req, res) => {
       }
     }
 
-    if ((role === "PRO" || role === "ADMIN") && convexUserId) {
+    // Log flights for ALL signed-in users (viewing history is restricted in frontend)
+    if (convexUserId) {
       if (!flightSessions.has(data.id)) {
         flightSessions.set(data.id, {
           convexUserId: convexUserId,
