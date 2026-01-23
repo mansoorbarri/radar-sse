@@ -29,6 +29,27 @@ function extractAirlineCode(callsign) {
   return match ? match[1].toUpperCase() : null;
 }
 
+// Normalize aircraft type from GeoFS format to DB format
+// e.g., "Boeing 777-300ER" -> "B777", "Airbus A320" -> "A320"
+function normalizeAircraftType(type) {
+  if (!type) return null;
+  const upper = type.toUpperCase();
+
+  // Boeing: "BOEING 777-300ER" -> "B777"
+  const boeingMatch = upper.match(/BOEING\s+(\d{3})/);
+  if (boeingMatch) return `B${boeingMatch[1]}`;
+
+  // Airbus: "AIRBUS A320" -> "A320"
+  const airbusMatch = upper.match(/AIRBUS\s+(A\d{3})/);
+  if (airbusMatch) return airbusMatch[1];
+
+  // Already in short format (e.g., "B737", "A320")
+  const shortMatch = upper.match(/^[AB]\d{3}$/);
+  if (shortMatch) return upper;
+
+  return null;
+}
+
 // Check for missing aircraft image and notify Discord
 async function checkAndNotifyMissingImage(flightNo, aircraftType) {
   if (!DISCORD_WEBHOOK_URL || !flightNo || !aircraftType) return;
@@ -36,7 +57,10 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
   const airlineCode = extractAirlineCode(flightNo);
   if (!airlineCode) return;
 
-  const key = `${airlineCode}-${aircraftType.toUpperCase()}`;
+  const normalizedType = normalizeAircraftType(aircraftType);
+  if (!normalizedType) return; // Unknown aircraft type format
+
+  const key = `${airlineCode}-${normalizedType}`;
 
   // Skip if already notified this hour
   if (notifiedMissingImages.has(key)) return;
@@ -45,7 +69,7 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
     // Check if approved image exists
     const image = await convex.query("aircraftImages:getApprovedImage", {
       airlineCode: airlineCode,
-      aircraftType: aircraftType,
+      aircraftType: normalizedType,
     });
 
     if (!image) {
@@ -60,11 +84,11 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
           embeds: [
             {
               title: "Missing Aircraft Image",
-              description: `No approved image found for **${airlineCode}** flying a **${aircraftType.toUpperCase()}**\n\n[Upload an image](https://radarthing.com/aircraft-images)`,
+              description: `No approved image found for **${airlineCode}** flying a **${normalizedType}**\n\n[Upload an image](https://radarthing.com/aircraft-images)`,
               color: 0xffa500, // Orange
               fields: [
                 { name: "Callsign", value: flightNo, inline: true },
-                { name: "Aircraft", value: aircraftType.toUpperCase(), inline: true },
+                { name: "Aircraft", value: normalizedType, inline: true },
               ],
               timestamp: new Date().toISOString(),
             },
