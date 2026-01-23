@@ -8,8 +8,9 @@ const app = express();
 // Discord webhook for missing image notifications
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_MISSING_IMAGE_WEBHOOK;
 
-// Track notified airline+aircraft combos to avoid spam (reset every hour)
-let notifiedMissingImages = new Set();
+// Track notified airline+aircraft combos with Discord message IDs (reset every hour)
+// Map: key (e.g., "UAE-B777") -> { messageId, webhookUrl }
+let notifiedMissingImages = new Map();
 setInterval(() => {
   notifiedMissingImages.clear();
 }, 3600000); // Clear every hour
@@ -73,11 +74,9 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
     });
 
     if (!image) {
-      // Mark as notified
-      notifiedMissingImages.add(key);
-
-      // Send Discord notification
-      await fetch(DISCORD_WEBHOOK_URL, {
+      // Send Discord notification with ?wait=true to get message ID
+      const webhookUrlWithWait = `${DISCORD_WEBHOOK_URL}?wait=true`;
+      const response = await fetch(webhookUrlWithWait, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -95,7 +94,20 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
           ],
         }),
       });
-      console.log(`[NOTIFY] Missing image for ${key}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        // Store message ID for later deletion
+        notifiedMissingImages.set(key, {
+          messageId: data.id,
+          webhookUrl: DISCORD_WEBHOOK_URL,
+        });
+        console.log(`[NOTIFY] Missing image for ${key} (msg: ${data.id})`);
+      } else {
+        // Still mark as notified to prevent spam, but without message ID
+        notifiedMissingImages.set(key, { messageId: null, webhookUrl: null });
+        console.log(`[NOTIFY] Missing image for ${key} (no msg ID)`);
+      }
     }
   } catch (e) {
     console.error("[NOTIFY] Error checking/sending notification:", e.message);
@@ -373,6 +385,40 @@ app.get("/api/commands/:id", (req, res) => {
   }
 
   res.json({ commands });
+});
+
+// Delete Discord notification when an aircraft image is uploaded
+app.post("/api/image-uploaded", async (req, res) => {
+  const { airlineCode, aircraftType } = req.body;
+
+  if (!airlineCode || !aircraftType) {
+    return res.status(400).json({ error: "Missing airlineCode or aircraftType" });
+  }
+
+  const key = `${airlineCode.toUpperCase()}-${aircraftType.toUpperCase()}`;
+  const notification = notifiedMissingImages.get(key);
+
+  if (!notification || !notification.messageId) {
+    return res.json({ success: true, deleted: false, reason: "No notification found" });
+  }
+
+  try {
+    // Delete the Discord message using webhook
+    const deleteUrl = `${notification.webhookUrl}/messages/${notification.messageId}`;
+    const response = await fetch(deleteUrl, { method: "DELETE" });
+
+    if (response.ok || response.status === 204) {
+      notifiedMissingImages.delete(key);
+      console.log(`[NOTIFY] Deleted notification for ${key}`);
+      return res.json({ success: true, deleted: true });
+    } else {
+      console.error(`[NOTIFY] Failed to delete message: ${response.status}`);
+      return res.json({ success: true, deleted: false, reason: "Discord API error" });
+    }
+  } catch (e) {
+    console.error("[NOTIFY] Error deleting Discord message:", e.message);
+    return res.json({ success: true, deleted: false, reason: e.message });
+  }
 });
 
 // Check for aircraft that stopped sending updates (12 second timeout)
