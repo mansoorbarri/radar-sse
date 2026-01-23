@@ -177,7 +177,7 @@ async function finalizeDisconnectedSession(convexUserId) {
       const endTime = Date.now();
       await convex.mutation("flights:create", {
         userId: session.convexUserId,
-        callsign: session.callsign,
+        callsign: session.flightNo,
         aircraftType: session.aircraftType,
         depICAO: session.departure,
         arrICAO: session.arrival,
@@ -189,7 +189,7 @@ async function finalizeDisconnectedSession(convexUserId) {
         startTime: session.startTime.getTime(),
         endTime: endTime,
       });
-      console.log(`[FINALIZE] Flight saved for ${session.callsign}`);
+      console.log(`[FINALIZE] Flight saved for ${session.flightNo}`);
     }
   } catch (e) {
     console.error("[FINALIZE] Error saving flight:", e);
@@ -237,7 +237,7 @@ app.post("/api/atc/position", async (req, res) => {
       // Check if this user has a disconnected session we can restore
       if (!flightSessions.has(data.id) && disconnectedSessions.has(convexUserId)) {
         const { session, originalId } = disconnectedSessions.get(convexUserId);
-        console.log(`[RECONNECT] Restoring flight session for ${session.callsign} (was ${originalId}, now ${data.id})`);
+        console.log(`[RECONNECT] Restoring flight session for ${session.flightNo} (was ${originalId}, now ${data.id})`);
 
         // Restore the session with the current aircraft ID
         flightSessions.set(data.id, session);
@@ -430,7 +430,7 @@ setInterval(() => {
       const session = flightSessions.get(id);
       if (session) {
         console.log(
-          `[DISCONNECT] ${id} (${session.callsign}) disconnected, entering grace period`
+          `[DISCONNECT] ${id} (${session.flightNo}) disconnected, entering grace period`
         );
         // Move to disconnected sessions instead of finalizing
         disconnectedSessions.set(session.convexUserId, {
