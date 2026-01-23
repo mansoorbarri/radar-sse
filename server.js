@@ -20,6 +20,10 @@ let aircraftMap = new Map();
 let subscribers = [];
 let flightSessions = new Map();
 let commandQueue = new Map(); // Stores pending commands per aircraft: id -> [commands]
+let disconnectedSessions = new Map(); // convexUserId -> { session, originalId, disconnectedAt }
+
+// Grace period before finalizing a flight after disconnect (3 minutes)
+const GRACE_PERIOD_MS = 180000;
 
 function broadcast() {
   const message = JSON.stringify({
@@ -51,6 +55,35 @@ async function finalizeFlight(id) {
     console.error(e);
   } finally {
     flightSessions.delete(id);
+  }
+}
+
+// Finalize a disconnected session after grace period expires
+async function finalizeDisconnectedSession(convexUserId) {
+  const data = disconnectedSessions.get(convexUserId);
+  if (!data) return;
+
+  const { session } = data;
+  console.log(`[FINALIZE] Grace period expired for user ${convexUserId}, saving flight`);
+
+  try {
+    if (session.coords.length > 2) {
+      await convex.mutation("flights:create", {
+        userId: session.convexUserId,
+        callsign: session.callsign,
+        aircraftType: session.aircraftType,
+        depICAO: session.departure,
+        arrICAO: session.arrival,
+        routeData: session.coords,
+        startTime: session.startTime.getTime(),
+        endTime: Date.now(),
+      });
+      console.log(`[FINALIZE] Flight saved for ${session.callsign}`);
+    }
+  } catch (e) {
+    console.error("[FINALIZE] Error saving flight:", e);
+  } finally {
+    disconnectedSessions.delete(convexUserId);
   }
 }
 
@@ -90,7 +123,25 @@ app.post("/api/atc/position", async (req, res) => {
 
     // Log flights for ALL signed-in users (viewing history is restricted in frontend)
     if (convexUserId) {
-      if (!flightSessions.has(data.id)) {
+      // Check if this user has a disconnected session we can restore
+      if (!flightSessions.has(data.id) && disconnectedSessions.has(convexUserId)) {
+        const { session, originalId } = disconnectedSessions.get(convexUserId);
+        console.log(`[RECONNECT] Restoring flight session for ${session.callsign} (was ${originalId}, now ${data.id})`);
+
+        // Restore the session with the current aircraft ID
+        flightSessions.set(data.id, session);
+        disconnectedSessions.delete(convexUserId);
+
+        // Add current position
+        const last = session.coords[session.coords.length - 1];
+        if (
+          Math.abs(last[0] - data.lat) > 0.0002 ||
+          Math.abs(last[1] - data.lon) > 0.0002
+        ) {
+          session.coords.push([data.lat, data.lon]);
+        }
+      } else if (!flightSessions.has(data.id)) {
+        // New flight session
         flightSessions.set(data.id, {
           convexUserId: convexUserId,
           callsign: data.callsign || "Unknown",
@@ -101,6 +152,7 @@ app.post("/api/atc/position", async (req, res) => {
           startTime: new Date(),
         });
       } else {
+        // Existing active session - add coordinates
         let session = flightSessions.get(data.id);
         const last = session.coords[session.coords.length - 1];
         if (
@@ -195,21 +247,42 @@ app.get("/api/commands/:id", (req, res) => {
   res.json({ commands });
 });
 
+// Check for aircraft that stopped sending updates (12 second timeout)
+// Moves flight sessions to grace period instead of finalizing immediately
 setInterval(() => {
   const now = Date.now();
   for (const [id, aircraft] of aircraftMap.entries()) {
     if (now - (aircraft.ts || 0) > 12000) {
-      console.log(
-        `[TIMEOUT] ${id} timed out. Active sessions: ${flightSessions.has(id)}`
-      );
-      if (flightSessions.has(id)) {
-        finalizeFlight(id);
+      const session = flightSessions.get(id);
+      if (session) {
+        console.log(
+          `[DISCONNECT] ${id} (${session.callsign}) disconnected, entering grace period`
+        );
+        // Move to disconnected sessions instead of finalizing
+        disconnectedSessions.set(session.convexUserId, {
+          session,
+          originalId: id,
+          disconnectedAt: now,
+        });
+        flightSessions.delete(id);
+      } else {
+        console.log(`[TIMEOUT] ${id} timed out (no active session)`);
       }
       aircraftMap.delete(id);
       commandQueue.delete(id); // Clean up stale commands
     }
   }
 }, 5000);
+
+// Check for disconnected sessions that have exceeded the grace period
+setInterval(() => {
+  const now = Date.now();
+  for (const [convexUserId, data] of disconnectedSessions.entries()) {
+    if (now - data.disconnectedAt > GRACE_PERIOD_MS) {
+      finalizeDisconnectedSession(convexUserId);
+    }
+  }
+}, 30000); // Check every 30 seconds
 
 app.listen(process.env.PORT || 3001, "0.0.0.0", () => {
   console.log(`[SSE Server] Running on http://localhost:${process.env.PORT || 3001}`);
