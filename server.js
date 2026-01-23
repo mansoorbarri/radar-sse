@@ -5,6 +5,15 @@ const { ConvexHttpClient } = require("convex/browser");
 
 const app = express();
 
+// Discord webhook for missing image notifications
+const DISCORD_WEBHOOK_URL = process.env.DISCORD_MISSING_IMAGE_WEBHOOK;
+
+// Track notified airline+aircraft combos to avoid spam (reset every hour)
+let notifiedMissingImages = new Set();
+setInterval(() => {
+  notifiedMissingImages.clear();
+}, 3600000); // Clear every hour
+
 // Initialize Convex client
 const convexUrl = process.env.CONVEX_URL || process.env.NEXT_PUBLIC_CONVEX_URL;
 if (!convexUrl) {
@@ -12,6 +21,63 @@ if (!convexUrl) {
   process.exit(1);
 }
 const convex = new ConvexHttpClient(convexUrl);
+
+// Extract airline code from callsign (e.g., "UAE123" -> "UAE", "EK456" -> "EK")
+function extractAirlineCode(callsign) {
+  if (!callsign) return null;
+  const match = callsign.match(/^([A-Z]{2,3})/i);
+  return match ? match[1].toUpperCase() : null;
+}
+
+// Check for missing aircraft image and notify Discord
+async function checkAndNotifyMissingImage(callsign, aircraftType) {
+  if (!DISCORD_WEBHOOK_URL || !callsign || !aircraftType) return;
+
+  const airlineCode = extractAirlineCode(callsign);
+  if (!airlineCode) return;
+
+  const key = `${airlineCode}-${aircraftType.toUpperCase()}`;
+
+  // Skip if already notified this hour
+  if (notifiedMissingImages.has(key)) return;
+
+  try {
+    // Check if approved image exists
+    const image = await convex.query("aircraftImages:getApprovedImage", {
+      airlineCode: airlineCode,
+      aircraftType: aircraftType,
+    });
+
+    if (!image) {
+      // Mark as notified
+      notifiedMissingImages.add(key);
+
+      // Send Discord notification
+      await fetch(DISCORD_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          embeds: [
+            {
+              title: "Missing Aircraft Image",
+              description: `No approved image found for **${airlineCode}** flying a **${aircraftType.toUpperCase()}**`,
+              color: 0xffa500, // Orange
+              fields: [
+                { name: "Callsign", value: callsign, inline: true },
+                { name: "Aircraft", value: aircraftType.toUpperCase(), inline: true },
+              ],
+              footer: { text: "Upload at radarthing.com/images" },
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }),
+      });
+      console.log(`[NOTIFY] Missing image for ${key}`);
+    }
+  } catch (e) {
+    console.error("[NOTIFY] Error checking/sending notification:", e.message);
+  }
+}
 
 app.use(cors());
 app.use(express.json());
@@ -206,6 +272,9 @@ app.post("/api/atc/position", async (req, res) => {
       ts: Date.now(),
     });
     broadcast();
+
+    // Check for missing aircraft image (fire and forget - don't block response)
+    checkAndNotifyMissingImage(data.callsign, data.type);
   }
   res.sendStatus(200);
 });
