@@ -63,7 +63,7 @@ async function checkAndNotifyMissingImage(callsign, aircraftType) {
               description: `No approved image found for **${airlineCode}** flying a **${aircraftType.toUpperCase()}**\n\n[Upload an image](https://radarthing.com/aircraft-images)`,
               color: 0xffa500, // Orange
               fields: [
-                { name: "Flight No", value: callsign, inline: true },
+                { name: "Callsign", value: flightNo, inline: true },
                 { name: "Aircraft", value: aircraftType.toUpperCase(), inline: true },
               ],
               timestamp: new Date().toISOString(),
@@ -108,7 +108,7 @@ async function finalizeFlight(id) {
       const endTime = Date.now();
       await convex.mutation("flights:create", {
         userId: session.convexUserId,
-        callsign: session.callsign,
+        callsign: session.flightNo,
         aircraftType: session.aircraftType,
         depICAO: session.departure,
         arrICAO: session.arrival,
