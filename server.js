@@ -60,13 +60,12 @@ async function checkAndNotifyMissingImage(callsign, aircraftType) {
           embeds: [
             {
               title: "Missing Aircraft Image",
-              description: `No approved image found for **${airlineCode}** flying a **${aircraftType.toUpperCase()}**`,
+              description: `No approved image found for **${airlineCode}** flying a **${aircraftType.toUpperCase()}**\n\n[Upload an image](https://radarthing.com/aircraft-images)`,
               color: 0xffa500, // Orange
               fields: [
-                { name: "Callsign", value: callsign, inline: true },
+                { name: "Flight No", value: callsign, inline: true },
                 { name: "Aircraft", value: aircraftType.toUpperCase(), inline: true },
               ],
-              footer: { text: "Upload at radarthing.com/images" },
               timestamp: new Date().toISOString(),
             },
           ],
