@@ -30,10 +30,10 @@ function extractAirlineCode(callsign) {
 }
 
 // Check for missing aircraft image and notify Discord
-async function checkAndNotifyMissingImage(callsign, aircraftType) {
-  if (!DISCORD_WEBHOOK_URL || !callsign || !aircraftType) return;
+async function checkAndNotifyMissingImage(flightNo, aircraftType) {
+  if (!DISCORD_WEBHOOK_URL || !flightNo || !aircraftType) return;
 
-  const airlineCode = extractAirlineCode(callsign);
+  const airlineCode = extractAirlineCode(flightNo);
   if (!airlineCode) return;
 
   const key = `${airlineCode}-${aircraftType.toUpperCase()}`;
@@ -231,6 +231,7 @@ app.post("/api/atc/position", async (req, res) => {
         flightSessions.set(data.id, {
           convexUserId: convexUserId,
           callsign: data.callsign || "Unknown",
+          flightNo: data.flightNo || "Unknown",
           aircraftType: data.type || "Unknown",
           departure: data.departure || "???",
           arrival: data.arrival || "???",
@@ -273,7 +274,7 @@ app.post("/api/atc/position", async (req, res) => {
     broadcast();
 
     // Check for missing aircraft image (fire and forget - don't block response)
-    checkAndNotifyMissingImage(data.callsign, data.type);
+    checkAndNotifyMissingImage(data.flightNo, data.type);
   }
   res.sendStatus(200);
 });
