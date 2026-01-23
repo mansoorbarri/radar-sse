@@ -40,15 +40,20 @@ async function finalizeFlight(id) {
 
   try {
     if (session.coords.length > 2) {
+      const endTime = Date.now();
       await convex.mutation("flights:create", {
         userId: session.convexUserId,
         callsign: session.callsign,
         aircraftType: session.aircraftType,
         depICAO: session.departure,
         arrICAO: session.arrival,
+        squawk: session.squawk || undefined,
+        duration: endTime - session.startTime.getTime(),
+        maxAltitude: session.maxAltitude || undefined,
+        maxSpeed: session.maxSpeed || undefined,
         routeData: session.coords,
         startTime: session.startTime.getTime(),
-        endTime: Date.now(),
+        endTime: endTime,
       });
     }
   } catch (e) {
@@ -68,15 +73,20 @@ async function finalizeDisconnectedSession(convexUserId) {
 
   try {
     if (session.coords.length > 2) {
+      const endTime = Date.now();
       await convex.mutation("flights:create", {
         userId: session.convexUserId,
         callsign: session.callsign,
         aircraftType: session.aircraftType,
         depICAO: session.departure,
         arrICAO: session.arrival,
+        squawk: session.squawk || undefined,
+        duration: endTime - session.startTime.getTime(),
+        maxAltitude: session.maxAltitude || undefined,
+        maxSpeed: session.maxSpeed || undefined,
         routeData: session.coords,
         startTime: session.startTime.getTime(),
-        endTime: Date.now(),
+        endTime: endTime,
       });
       console.log(`[FINALIZE] Flight saved for ${session.callsign}`);
     }
@@ -140,6 +150,17 @@ app.post("/api/atc/position", async (req, res) => {
         ) {
           session.coords.push([data.lat, data.lon]);
         }
+        // Update squawk if provided
+        if (data.squawk) {
+          session.squawk = data.squawk;
+        }
+        // Track max altitude and speed
+        if (data.altMSL && data.altMSL > session.maxAltitude) {
+          session.maxAltitude = data.altMSL;
+        }
+        if (data.speed && data.speed > session.maxSpeed) {
+          session.maxSpeed = data.speed;
+        }
       } else if (!flightSessions.has(data.id)) {
         // New flight session
         flightSessions.set(data.id, {
@@ -148,11 +169,14 @@ app.post("/api/atc/position", async (req, res) => {
           aircraftType: data.type || "Unknown",
           departure: data.departure || "???",
           arrival: data.arrival || "???",
+          squawk: data.squawk || null,
+          maxAltitude: data.altMSL || 0,
+          maxSpeed: data.speed || 0,
           coords: [[data.lat, data.lon]],
           startTime: new Date(),
         });
       } else {
-        // Existing active session - add coordinates
+        // Existing active session - add coordinates and update max values
         let session = flightSessions.get(data.id);
         const last = session.coords[session.coords.length - 1];
         if (
@@ -160,6 +184,17 @@ app.post("/api/atc/position", async (req, res) => {
           Math.abs(last[1] - data.lon) > 0.0002
         ) {
           session.coords.push([data.lat, data.lon]);
+        }
+        // Update squawk if provided
+        if (data.squawk) {
+          session.squawk = data.squawk;
+        }
+        // Track max altitude and speed
+        if (data.altMSL && data.altMSL > session.maxAltitude) {
+          session.maxAltitude = data.altMSL;
+        }
+        if (data.speed && data.speed > session.maxSpeed) {
+          session.maxSpeed = data.speed;
         }
       }
     }
