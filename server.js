@@ -388,6 +388,81 @@ app.get("/api/commands/:id", (req, res) => {
   res.json({ commands });
 });
 
+// End flight immediately (called when user clicks Clear in the UI)
+app.post("/api/end-flight", async (req, res) => {
+  const { id, googleId } = req.body;
+
+  if (!id && !googleId) {
+    return res.status(400).json({ error: "Missing id or googleId" });
+  }
+
+  let finalized = false;
+  let sessionInfo = null;
+
+  // First, check active flight sessions by aircraft ID
+  if (id && flightSessions.has(id)) {
+    const session = flightSessions.get(id);
+    sessionInfo = { flightNo: session.flightNo, convexUserId: session.convexUserId };
+    console.log(`[END-FLIGHT] Finalizing active session for ${session.flightNo} (id: ${id})`);
+    await finalizeFlight(id);
+    finalized = true;
+  }
+
+  // If not found by ID, try to find by googleId in active sessions
+  if (!finalized && googleId) {
+    for (const [aircraftId, session] of flightSessions.entries()) {
+      if (session.convexUserId) {
+        // We need to check if the googleId maps to this convexUserId
+        // Since we store convexUserId, check disconnectedSessions which stores by convexUserId
+        // For active sessions, we'll need to iterate and match
+        try {
+          const user = await convex.query("users:getByGoogleId", { googleId: String(googleId) });
+          if (user && user._id === session.convexUserId) {
+            sessionInfo = { flightNo: session.flightNo, convexUserId: session.convexUserId };
+            console.log(`[END-FLIGHT] Finalizing active session for ${session.flightNo} (found by googleId)`);
+            await finalizeFlight(aircraftId);
+            finalized = true;
+            break;
+          }
+        } catch (e) {
+          console.error("[END-FLIGHT] Error looking up user:", e);
+        }
+      }
+    }
+  }
+
+  // Check disconnected sessions (in grace period)
+  if (!finalized && googleId) {
+    try {
+      const user = await convex.query("users:getByGoogleId", { googleId: String(googleId) });
+      if (user && disconnectedSessions.has(user._id)) {
+        const data = disconnectedSessions.get(user._id);
+        sessionInfo = { flightNo: data.session.flightNo, convexUserId: user._id };
+        console.log(`[END-FLIGHT] Finalizing disconnected session for ${data.session.flightNo}`);
+        await finalizeDisconnectedSession(user._id);
+        finalized = true;
+      }
+    } catch (e) {
+      console.error("[END-FLIGHT] Error looking up user for disconnected session:", e);
+    }
+  }
+
+  // Remove from aircraftMap if present
+  if (id && aircraftMap.has(id)) {
+    aircraftMap.delete(id);
+    commandQueue.delete(id);
+    broadcast();
+  }
+
+  if (finalized) {
+    console.log(`[END-FLIGHT] Successfully ended flight for ${sessionInfo?.flightNo}`);
+    return res.json({ success: true, finalized: true, flightNo: sessionInfo?.flightNo });
+  } else {
+    console.log(`[END-FLIGHT] No active session found for id=${id}, googleId=${googleId}`);
+    return res.json({ success: true, finalized: false, reason: "No active session found" });
+  }
+});
+
 // Delete Discord notification when an aircraft image is uploaded
 app.post("/api/image-uploaded", async (req, res) => {
   const { airlineCode, aircraftType } = req.body;
