@@ -5,9 +5,6 @@ const { ConvexHttpClient } = require("convex/browser");
 
 const app = express();
 
-// Discord webhook for missing image notifications
-const DISCORD_WEBHOOK_URL = process.env.DISCORD_MISSING_IMAGE_WEBHOOK;
-
 // Initialize Convex client
 const convexUrl = process.env.CONVEX_URL || process.env.NEXT_PUBLIC_CONVEX_URL;
 if (!convexUrl) {
@@ -44,9 +41,9 @@ function normalizeAircraftType(type) {
   return null;
 }
 
-// Check for missing aircraft image and notify Discord
+// Check for missing aircraft image and record in Convex
 async function checkAndNotifyMissingImage(flightNo, aircraftType) {
-  if (!DISCORD_WEBHOOK_URL || !flightNo || !aircraftType) return;
+  if (!flightNo || !aircraftType) return;
 
   const airlineCode = extractAirlineCode(flightNo);
   if (!airlineCode) return;
@@ -55,7 +52,7 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
   if (!normalizedType) return; // Unknown aircraft type format
 
   try {
-    // Check if we already sent a notification for this combo (stored in Convex)
+    // Check if we already have a record for this combo
     const alreadyNotified = await convex.query("missingImageNotifications:exists", {
       airlineCode: airlineCode,
       aircraftType: normalizedType,
@@ -71,47 +68,15 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
 
     if (image) return; // Image exists, nothing to do
 
-    // Create notification record FIRST to prevent race conditions
+    // Create notification record for admin review
     await convex.mutation("missingImageNotifications:create", {
       airlineCode: airlineCode,
       aircraftType: normalizedType,
     });
 
-    // Send Discord notification with ?wait=true to get message ID
-    const webhookUrlWithWait = `${DISCORD_WEBHOOK_URL}?wait=true`;
-    const response = await fetch(webhookUrlWithWait, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        embeds: [
-          {
-            title: "Missing Aircraft Image",
-            description: `No approved image found for **${airlineCode}** flying a **${normalizedType}**\n\n[Upload an image](https://radarthing.com/aircraft-images)`,
-            color: 0xffa500, // Orange
-            fields: [
-              { name: "Callsign", value: flightNo, inline: true },
-              { name: "Aircraft", value: normalizedType, inline: true },
-            ],
-            timestamp: new Date().toISOString(),
-          },
-        ],
-      }),
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      // Update record with Discord message ID for later deletion
-      await convex.mutation("missingImageNotifications:updateMessageId", {
-        airlineCode: airlineCode,
-        aircraftType: normalizedType,
-        discordMessageId: data.id,
-      });
-      console.log(`[NOTIFY] Missing image for ${airlineCode}-${normalizedType} (msg: ${data.id})`);
-    } else {
-      console.log(`[NOTIFY] Missing image for ${airlineCode}-${normalizedType} (no msg ID, status: ${response.status})`);
-    }
+    console.log(`[NOTIFY] Recorded missing image for ${airlineCode}-${normalizedType}`);
   } catch (e) {
-    console.error("[NOTIFY] Error checking/sending notification:", e.message);
+    console.error("[NOTIFY] Error checking/recording notification:", e.message);
   }
 }
 
@@ -460,47 +425,6 @@ app.post("/api/end-flight", async (req, res) => {
   } else {
     console.log(`[END-FLIGHT] No active session found for id=${id}, googleId=${googleId}`);
     return res.json({ success: true, finalized: false, reason: "No active session found" });
-  }
-});
-
-// Delete Discord notification when an aircraft image is uploaded
-app.post("/api/image-uploaded", async (req, res) => {
-  const { airlineCode, aircraftType } = req.body;
-
-  if (!airlineCode || !aircraftType) {
-    return res.status(400).json({ error: "Missing airlineCode or aircraftType" });
-  }
-
-  try {
-    // Remove from Convex and get the Discord message ID
-    const result = await convex.mutation("missingImageNotifications:remove", {
-      airlineCode: airlineCode,
-      aircraftType: aircraftType,
-    });
-
-    if (!result.deleted || !result.discordMessageId) {
-      console.log(`[NOTIFY] No notification found for ${airlineCode}-${aircraftType}`);
-      return res.json({ success: true, deleted: false, reason: "No notification found" });
-    }
-
-    // Delete the Discord message using webhook
-    if (DISCORD_WEBHOOK_URL) {
-      const deleteUrl = `${DISCORD_WEBHOOK_URL}/messages/${result.discordMessageId}`;
-      const response = await fetch(deleteUrl, { method: "DELETE" });
-
-      if (response.ok || response.status === 204) {
-        console.log(`[NOTIFY] Deleted Discord notification for ${airlineCode}-${aircraftType}`);
-        return res.json({ success: true, deleted: true });
-      } else {
-        console.error(`[NOTIFY] Failed to delete Discord message: ${response.status}`);
-        return res.json({ success: true, deleted: false, reason: "Discord API error" });
-      }
-    }
-
-    return res.json({ success: true, deleted: true });
-  } catch (e) {
-    console.error("[NOTIFY] Error deleting notification:", e.message);
-    return res.json({ success: true, deleted: false, reason: e.message });
   }
 });
 
