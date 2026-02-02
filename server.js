@@ -356,6 +356,8 @@ app.get("/api/commands/:id", (req, res) => {
 // End flight immediately (called when user clicks Clear in the UI)
 app.post("/api/end-flight", async (req, res) => {
   const { id, googleId } = req.body;
+  console.log(`[END-FLIGHT] Request received: id=${id}, googleId=${googleId}`);
+  console.log(`[END-FLIGHT] Active sessions: ${flightSessions.size}, Disconnected: ${disconnectedSessions.size}`);
 
   if (!id && !googleId) {
     return res.status(400).json({ error: "Missing id or googleId" });
@@ -396,14 +398,27 @@ app.post("/api/end-flight", async (req, res) => {
     }
   }
 
-  // Check disconnected sessions (in grace period)
+  // Check disconnected sessions (in grace period) - first by original ID
+  if (!finalized && id) {
+    for (const [convexUserId, data] of disconnectedSessions.entries()) {
+      if (data.originalId === id) {
+        sessionInfo = { flightNo: data.session.flightNo, convexUserId };
+        console.log(`[END-FLIGHT] Finalizing disconnected session for ${data.session.flightNo} (found by originalId)`);
+        await finalizeDisconnectedSession(convexUserId);
+        finalized = true;
+        break;
+      }
+    }
+  }
+
+  // Check disconnected sessions by googleId lookup
   if (!finalized && googleId) {
     try {
       const user = await convex.query("users:getByGoogleId", { googleId: String(googleId) });
       if (user && disconnectedSessions.has(user._id)) {
         const data = disconnectedSessions.get(user._id);
         sessionInfo = { flightNo: data.session.flightNo, convexUserId: user._id };
-        console.log(`[END-FLIGHT] Finalizing disconnected session for ${data.session.flightNo}`);
+        console.log(`[END-FLIGHT] Finalizing disconnected session for ${data.session.flightNo} (found by googleId)`);
         await finalizeDisconnectedSession(user._id);
         finalized = true;
       }
