@@ -1,7 +1,13 @@
 const express = require("express");
 const { convex } = require("../db");
 const { MAX_MEMORY_COORDS } = require("../config");
-const { aircraftMap, flightSessions, disconnectedSessions } = require("../store");
+const {
+  aircraftMap,
+  flightSessions,
+  disconnectedSessions,
+  getCachedUser,
+  setCachedUser,
+} = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { checkAndNotifyMissingImage } = require("../services/imageNotifier");
 const { downsampleRoute } = require("../utils/route");
@@ -32,29 +38,42 @@ router.post("/", async (req, res) => {
     let convexUserId = null;
 
     if (data.googleId) {
-      try {
-        const searchId = String(data.googleId);
-        const user = await convex.query("users:getByGoogleId", {
-          googleId: searchId,
-        });
+      const searchId = String(data.googleId);
 
-        if (user) {
-          role = user.role;
-          convexUserId = user._id;
-          console.log(
-            `[AUTH] Found ${user.clerkId} | Role: ${role} | ID: ${convexUserId}`
-          );
-        } else {
-          // Explicitly default to FREE when user not found
+      // Check cache first to avoid Convex query
+      const cached = getCachedUser(searchId);
+      if (cached) {
+        role = cached.role;
+        convexUserId = cached.convexUserId;
+        // Only log occasionally to reduce noise (cache hits are frequent)
+      } else {
+        // Cache miss - query Convex and cache the result
+        try {
+          const user = await convex.query("users:getByGoogleId", {
+            googleId: searchId,
+          });
+
+          // Cache the result (even if null - prevents repeated lookups for unknown users)
+          setCachedUser(searchId, user);
+
+          if (user) {
+            role = user.role;
+            convexUserId = user._id;
+            console.log(
+              `[AUTH] Found ${user.clerkId} | Role: ${role} | ID: ${convexUserId}`
+            );
+          } else {
+            // Explicitly default to FREE when user not found
+            role = "FREE";
+            console.log(
+              `[AUTH] No user found for ID: ${searchId} - defaulting to FREE`
+            );
+          }
+        } catch (e) {
+          // On DB error, also default to FREE (don't cache errors)
           role = "FREE";
-          console.log(
-            `[AUTH] No user found for ID: ${searchId} - defaulting to FREE`
-          );
+          console.error("[DB ERROR] Defaulting to FREE role:", e);
         }
-      } catch (e) {
-        // On DB error, also default to FREE
-        role = "FREE";
-        console.error("[DB ERROR] Defaulting to FREE role:", e);
       }
     }
 
