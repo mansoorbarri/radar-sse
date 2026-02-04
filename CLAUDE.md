@@ -49,12 +49,22 @@ src/
 - `subscribers` - SSE client connections (Array<{id, res}>)
 - `commandQueue` - Pending remote commands per aircraft (Map<id, commands[]>)
 
-### Key Timings
+### Key Timings & Limits
 
+- **Broadcast throttle**: Max once per 500ms (batches updates)
 - **Grace period**: 180 seconds before finalizing disconnected flights
 - **Timeout check**: Every 5 seconds (removes aircraft silent >12 seconds)
 - **Grace finalization**: Every 30 seconds
 - **Retry logic**: 3 attempts at 30-second intervals for failed saves
+- **Memory coords limit**: 2,000 points in-memory (downsampled to 1,500 when exceeded)
+- **Final route limit**: 8,000 points (Convex array limit is 8,192)
+
+### Efficiency Features
+
+- **Throttled broadcasts**: Position updates are batched and broadcast max once per 500ms
+- **Delta updates**: SSE messages include `type: "delta"` with only changed/removed aircraft
+- **Memory management**: Flight coords are downsampled during flight to cap RAM usage
+- **Initial full state**: New SSE subscribers receive `type: "full"` with all aircraft
 
 ### API Endpoints
 
@@ -98,4 +108,4 @@ Backend-as-a-service for persistent storage. Key operations:
 
 ## Log Prefixes
 
-Console logs use structured tags: `[AUTH]`, `[NOTIFY]`, `[FINALIZE]`, `[RETRY]`, `[DISCONNECT]`, `[TIMEOUT]`, `[CMD]`, `[END-FLIGHT]`, `[DB ERROR]`
+Console logs use structured tags: `[AUTH]`, `[NOTIFY]`, `[FINALIZE]`, `[RETRY]`, `[DISCONNECT]`, `[TIMEOUT]`, `[CMD]`, `[END-FLIGHT]`, `[DB ERROR]`, `[MEMORY]`, `[RECONNECT]`

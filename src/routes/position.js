@@ -1,10 +1,28 @@
 const express = require("express");
 const { convex } = require("../db");
+const { MAX_MEMORY_COORDS } = require("../config");
 const { aircraftMap, flightSessions, disconnectedSessions } = require("../store");
-const { broadcast } = require("../services/broadcast");
+const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { checkAndNotifyMissingImage } = require("../services/imageNotifier");
+const { downsampleRoute } = require("../utils/route");
 
 const router = express.Router();
+
+// Add coordinate to session with memory limit enforcement
+function addCoordToSession(session, lat, lon) {
+  const last = session.coords[session.coords.length - 1];
+  // Only add if moved enough
+  if (Math.abs(last[0] - lat) > 0.0002 || Math.abs(last[1] - lon) > 0.0002) {
+    session.coords.push([lat, lon]);
+
+    // Downsample if exceeding memory limit
+    if (session.coords.length > MAX_MEMORY_COORDS) {
+      const targetSize = Math.floor(MAX_MEMORY_COORDS * 0.75); // Downsample to 75% to avoid frequent resampling
+      session.coords = downsampleRoute(session.coords, targetSize);
+      console.log(`[MEMORY] Downsampled ${session.flightNo} coords to ${session.coords.length}`);
+    }
+  }
+}
 
 router.post("/", async (req, res) => {
   const data = req.body;
@@ -52,13 +70,7 @@ router.post("/", async (req, res) => {
         disconnectedSessions.delete(convexUserId);
 
         // Add current position
-        const last = session.coords[session.coords.length - 1];
-        if (
-          Math.abs(last[0] - data.lat) > 0.0002 ||
-          Math.abs(last[1] - data.lon) > 0.0002
-        ) {
-          session.coords.push([data.lat, data.lon]);
-        }
+        addCoordToSession(session, data.lat, data.lon);
         // Update squawk if provided
         if (data.squawk) {
           session.squawk = data.squawk;
@@ -88,13 +100,7 @@ router.post("/", async (req, res) => {
       } else {
         // Existing active session - add coordinates and update max values
         const session = flightSessions.get(data.id);
-        const last = session.coords[session.coords.length - 1];
-        if (
-          Math.abs(last[0] - data.lat) > 0.0002 ||
-          Math.abs(last[1] - data.lon) > 0.0002
-        ) {
-          session.coords.push([data.lat, data.lon]);
-        }
+        addCoordToSession(session, data.lat, data.lon);
         // Update squawk if provided
         if (data.squawk) {
           session.squawk = data.squawk;
@@ -115,6 +121,7 @@ router.post("/", async (req, res) => {
       airlineLogo,
       ts: Date.now(),
     });
+    markAircraftChanged(data.id);
     broadcast();
 
     // Check for missing aircraft image (fire and forget - don't block response)

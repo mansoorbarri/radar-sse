@@ -2,7 +2,7 @@ const express = require("express");
 const { convex } = require("../db");
 const { MAX_RETRIES } = require("../config");
 const { aircraftMap, flightSessions, disconnectedSessions, commandQueue } = require("../store");
-const { broadcast } = require("../services/broadcast");
+const { broadcast, markAircraftRemoved } = require("../services/broadcast");
 const { finalizeFlight, finalizeDisconnectedSession } = require("../services/session");
 
 const router = express.Router();
@@ -160,6 +160,7 @@ router.post("/end-flight", async (req, res) => {
 
   // Remove from aircraftMap if present
   if (id && aircraftMap.has(id)) {
+    markAircraftRemoved(id);
     aircraftMap.delete(id);
     commandQueue.delete(id);
     broadcast();

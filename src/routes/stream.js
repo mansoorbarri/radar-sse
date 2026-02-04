@@ -1,5 +1,6 @@
 const express = require("express");
-const { aircraftMap, addSubscriber, removeSubscriber } = require("../store");
+const { addSubscriber, removeSubscriber } = require("../store");
+const { sendFullState } = require("../services/broadcast");
 
 const router = express.Router();
 
@@ -9,11 +10,8 @@ router.get("/", (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
 
-  const initial = JSON.stringify({
-    count: aircraftMap.size,
-    aircraft: Array.from(aircraftMap.values()),
-  });
-  res.write(`data: ${initial}\n\n`);
+  // Send full state on initial connection
+  sendFullState(res);
 
   const id = Date.now();
   addSubscriber({ id, res });
