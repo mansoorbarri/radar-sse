@@ -92,6 +92,28 @@ let disconnectedSessions = new Map(); // convexUserId -> { session, originalId, 
 // Grace period before finalizing a flight after disconnect (3 minutes)
 const GRACE_PERIOD_MS = 180000;
 
+// Maximum coordinates to store (Convex array limit is 8192)
+const MAX_ROUTE_COORDS = 8000;
+
+// Retry settings for failed flight saves
+const MAX_RETRIES = 3;
+const RETRY_INTERVAL_MS = 30000; // 30 seconds
+
+// Downsample an array to at most maxLength elements, keeping first and last
+function downsampleRoute(coords, maxLength) {
+  if (coords.length <= maxLength) return coords;
+
+  const result = [coords[0]];
+  const step = (coords.length - 1) / (maxLength - 1);
+
+  for (let i = 1; i < maxLength - 1; i++) {
+    result.push(coords[Math.round(i * step)]);
+  }
+
+  result.push(coords[coords.length - 1]);
+  return result;
+}
+
 function broadcast() {
   const message = JSON.stringify({
     count: aircraftMap.size,
@@ -101,13 +123,23 @@ function broadcast() {
   subscribers.forEach((s) => s.res.write(`data: ${message}\n\n`));
 }
 
-async function finalizeFlight(id) {
+async function finalizeFlight(id, isRetry = false) {
   const session = flightSessions.get(id);
-  if (!session) return;
+  if (!session) return { success: false, reason: "no_session" };
+
+  // Initialize retry count if not set
+  if (session.retryCount === undefined) {
+    session.retryCount = 0;
+  }
 
   try {
     if (session.coords.length > 2) {
-      const endTime = Date.now();
+      const endTime = session.endTime || Date.now();
+      if (!session.endTime) session.endTime = endTime; // Preserve original end time for retries
+      const routeData = downsampleRoute(session.coords, MAX_ROUTE_COORDS);
+      if (session.coords.length > MAX_ROUTE_COORDS) {
+        console.log(`[FINALIZE] Downsampled route from ${session.coords.length} to ${routeData.length} points`);
+      }
       await convex.mutation("flights:create", {
         userId: session.convexUserId,
         callsign: session.flightNo,
@@ -118,29 +150,55 @@ async function finalizeFlight(id) {
         duration: endTime - session.startTime.getTime(),
         maxAltitude: session.maxAltitude || undefined,
         maxSpeed: session.maxSpeed || undefined,
-        routeData: session.coords,
+        routeData: routeData,
         startTime: session.startTime.getTime(),
         endTime: endTime,
       });
     }
-  } catch (e) {
-    console.error(e);
-  } finally {
+    if (isRetry) {
+      console.log(`[RETRY] Successfully saved flight ${session.flightNo} on retry ${session.retryCount}`);
+    }
     flightSessions.delete(id);
+    return { success: true };
+  } catch (e) {
+    session.retryCount++;
+    session.failedAt = Date.now();
+    session.lastError = e.message;
+
+    if (session.retryCount < MAX_RETRIES) {
+      console.error(`[FINALIZE] Failed to save flight ${session.flightNo} (attempt ${session.retryCount}/${MAX_RETRIES}), will retry in ${RETRY_INTERVAL_MS / 1000}s:`, e.message);
+      setTimeout(() => finalizeFlight(id, true), RETRY_INTERVAL_MS);
+    } else {
+      console.error(`[FINALIZE] Failed to save flight ${session.flightNo} after ${MAX_RETRIES} attempts, keeping for manual retry:`, e.message);
+    }
+    return { success: false, reason: "save_failed", error: e.message, retryCount: session.retryCount };
   }
 }
 
 // Finalize a disconnected session after grace period expires
-async function finalizeDisconnectedSession(convexUserId) {
+async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
   const data = disconnectedSessions.get(convexUserId);
-  if (!data) return;
+  if (!data) return { success: false, reason: "no_session" };
 
   const { session } = data;
-  console.log(`[FINALIZE] Grace period expired for user ${convexUserId}, saving flight`);
+
+  // Initialize retry count if not set
+  if (data.retryCount === undefined) {
+    data.retryCount = 0;
+  }
+
+  if (!isRetry) {
+    console.log(`[FINALIZE] Grace period expired for user ${convexUserId}, saving flight`);
+  }
 
   try {
     if (session.coords.length > 2) {
-      const endTime = Date.now();
+      const endTime = data.endTime || Date.now();
+      if (!data.endTime) data.endTime = endTime; // Preserve original end time for retries
+      const routeData = downsampleRoute(session.coords, MAX_ROUTE_COORDS);
+      if (session.coords.length > MAX_ROUTE_COORDS) {
+        console.log(`[FINALIZE] Downsampled route from ${session.coords.length} to ${routeData.length} points`);
+      }
       await convex.mutation("flights:create", {
         userId: session.convexUserId,
         callsign: session.flightNo,
@@ -151,16 +209,30 @@ async function finalizeDisconnectedSession(convexUserId) {
         duration: endTime - session.startTime.getTime(),
         maxAltitude: session.maxAltitude || undefined,
         maxSpeed: session.maxSpeed || undefined,
-        routeData: session.coords,
+        routeData: routeData,
         startTime: session.startTime.getTime(),
         endTime: endTime,
       });
-      console.log(`[FINALIZE] Flight saved for ${session.flightNo}`);
+      if (isRetry) {
+        console.log(`[RETRY] Successfully saved flight ${session.flightNo} on retry ${data.retryCount}`);
+      } else {
+        console.log(`[FINALIZE] Flight saved for ${session.flightNo}`);
+      }
     }
-  } catch (e) {
-    console.error("[FINALIZE] Error saving flight:", e);
-  } finally {
     disconnectedSessions.delete(convexUserId);
+    return { success: true };
+  } catch (e) {
+    data.retryCount++;
+    data.failedAt = Date.now();
+    data.lastError = e.message;
+
+    if (data.retryCount < MAX_RETRIES) {
+      console.error(`[FINALIZE] Failed to save flight ${session.flightNo} (attempt ${data.retryCount}/${MAX_RETRIES}), will retry in ${RETRY_INTERVAL_MS / 1000}s:`, e.message);
+      setTimeout(() => finalizeDisconnectedSession(convexUserId, true), RETRY_INTERVAL_MS);
+    } else {
+      console.error(`[FINALIZE] Failed to save flight ${session.flightNo} after ${MAX_RETRIES} attempts, keeping for manual retry:`, e.message);
+    }
+    return { success: false, reason: "save_failed", error: e.message, retryCount: data.retryCount };
   }
 }
 
@@ -351,6 +423,83 @@ app.get("/api/commands/:id", (req, res) => {
   }
 
   res.json({ commands });
+});
+
+// List failed sessions that can be retried
+app.get("/api/failed-flights", (req, res) => {
+  const failed = [];
+
+  // Check active sessions with failures
+  for (const [id, session] of flightSessions.entries()) {
+    if (session.failedAt) {
+      failed.push({
+        type: "active",
+        id,
+        flightNo: session.flightNo,
+        convexUserId: session.convexUserId,
+        coordsCount: session.coords.length,
+        failedAt: session.failedAt,
+        lastError: session.lastError,
+        retryCount: session.retryCount || 0,
+        maxRetries: MAX_RETRIES,
+        autoRetryExhausted: (session.retryCount || 0) >= MAX_RETRIES,
+      });
+    }
+  }
+
+  // Check disconnected sessions with failures
+  for (const [convexUserId, data] of disconnectedSessions.entries()) {
+    if (data.failedAt) {
+      failed.push({
+        type: "disconnected",
+        convexUserId,
+        flightNo: data.session.flightNo,
+        coordsCount: data.session.coords.length,
+        failedAt: data.failedAt,
+        lastError: data.lastError,
+        retryCount: data.retryCount || 0,
+        maxRetries: MAX_RETRIES,
+        autoRetryExhausted: (data.retryCount || 0) >= MAX_RETRIES,
+      });
+    }
+  }
+
+  res.json({ failed, count: failed.length });
+});
+
+// Retry saving a failed flight (manual retry resets the counter for 3 more attempts)
+app.post("/api/retry-flight", async (req, res) => {
+  const { id, convexUserId } = req.body;
+
+  if (!id && !convexUserId) {
+    return res.status(400).json({ error: "Missing id or convexUserId" });
+  }
+
+  // Try active sessions first
+  if (id && flightSessions.has(id)) {
+    const session = flightSessions.get(id);
+    if (!session.failedAt) {
+      return res.status(400).json({ error: "Session has not failed, cannot retry" });
+    }
+    console.log(`[RETRY] Manual retry for flight ${session.flightNo} (id: ${id}), resetting retry counter`);
+    session.retryCount = 0; // Reset for 3 more auto-retry attempts
+    const result = await finalizeFlight(id, true);
+    return res.json(result);
+  }
+
+  // Try disconnected sessions
+  if (convexUserId && disconnectedSessions.has(convexUserId)) {
+    const data = disconnectedSessions.get(convexUserId);
+    if (!data.failedAt) {
+      return res.status(400).json({ error: "Session has not failed, cannot retry" });
+    }
+    console.log(`[RETRY] Manual retry for flight ${data.session.flightNo} (convexUserId: ${convexUserId}), resetting retry counter`);
+    data.retryCount = 0; // Reset for 3 more auto-retry attempts
+    const result = await finalizeDisconnectedSession(convexUserId, true);
+    return res.json(result);
+  }
+
+  return res.status(404).json({ error: "No failed session found with that id or convexUserId" });
 });
 
 // End flight immediately (called when user clicks Clear in the UI)
