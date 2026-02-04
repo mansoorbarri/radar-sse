@@ -1,0 +1,35 @@
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+
+// Initialize DB connection (validates env vars)
+require("./db");
+
+// Import routes
+const positionRouter = require("./routes/position");
+const streamRouter = require("./routes/stream");
+const commandsRouter = require("./routes/commands");
+const flightsRouter = require("./routes/flights");
+
+// Import background tasks
+const { startAllTasks } = require("./tasks/cleanup");
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+// Mount routes
+app.use("/api/atc/position", positionRouter);
+app.use("/api/stream", streamRouter);
+app.use("/api/command", commandsRouter);
+app.use("/api/commands", commandsRouter);
+app.use("/api", flightsRouter);
+
+// Start background tasks
+startAllTasks();
+
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`[SSE Server] Running on http://localhost:${PORT}`);
+});
