@@ -83,11 +83,11 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType) {
 app.use(cors());
 app.use(express.json());
 
-let aircraftMap = new Map();
+const aircraftMap = new Map();
 let subscribers = [];
-let flightSessions = new Map();
-let commandQueue = new Map(); // Stores pending commands per aircraft: id -> [commands]
-let disconnectedSessions = new Map(); // convexUserId -> { session, originalId, disconnectedAt }
+const flightSessions = new Map();
+const commandQueue = new Map(); // Stores pending commands per aircraft: id -> [commands]
+const disconnectedSessions = new Map(); // convexUserId -> { session, originalId, disconnectedAt }
 
 // Grace period before finalizing a flight after disconnect (3 minutes)
 const GRACE_PERIOD_MS = 180000;
@@ -240,7 +240,7 @@ app.post("/api/atc/position", async (req, res) => {
   const data = req.body;
   if (data.id) {
     let role = "FREE"; // Default to FREE
-    let airlineLogo = null;
+    const airlineLogo = null;
     let convexUserId = null;
 
     if (data.googleId) {
@@ -317,7 +317,7 @@ app.post("/api/atc/position", async (req, res) => {
         });
       } else {
         // Existing active session - add coordinates and update max values
-        let session = flightSessions.get(data.id);
+        const session = flightSessions.get(data.id);
         const last = session.coords[session.coords.length - 1];
         if (
           Math.abs(last[0] - data.lat) > 0.0002 ||
