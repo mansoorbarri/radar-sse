@@ -10,16 +10,38 @@ Real-time flight tracking SSE server for GeoFS. Broadcasts live aircraft positio
 
 ```bash
 bun install        # Install dependencies
-bun run start      # Run server (bun run server.js) - listens on PORT or 3001
+bun run start      # Run server (src/index.js) - listens on PORT or 3001
 bun run lint       # Run ESLint
 bun run lint:fix   # Run ESLint with auto-fix
 ```
 
 ## Architecture
 
-**Single-file monolith** - all application logic is in `server.js` (~635 lines).
+**Modular structure** in `src/`:
 
-### Core Data Structures (in-memory)
+```
+src/
+├── index.js              # Entry point, Express app setup
+├── config.js             # Constants (timings, limits)
+├── db.js                 # Convex client initialization
+├── store.js              # In-memory data structures
+├── utils/
+│   ├── aircraft.js       # Airline code extraction, type normalization
+│   └── route.js          # Route downsampling
+├── services/
+│   ├── broadcast.js      # SSE broadcast to subscribers
+│   ├── imageNotifier.js  # Missing image detection
+│   └── session.js        # Flight finalization logic
+├── routes/
+│   ├── position.js       # POST /api/atc/position
+│   ├── stream.js         # GET /api/stream
+│   ├── commands.js       # Command queue endpoints
+│   └── flights.js        # Flight management endpoints
+└── tasks/
+    └── cleanup.js        # Background interval tasks
+```
+
+### Core Data Structures (in-memory, defined in `src/store.js`)
 
 - `aircraftMap` - Current aircraft positions (Map<id, aircraft_data>)
 - `flightSessions` - Active flight recordings (Map<id, session>)
