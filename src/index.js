@@ -16,7 +16,13 @@ const { startAllTasks } = require("./tasks/cleanup");
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    "https://www.geo-fs.com",
+    "https://radarthing.com",
+    "https://vstrips.xyzmani.com",
+  ],
+}));
 app.use(express.json());
 
 // Mount routes
