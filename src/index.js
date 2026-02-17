@@ -21,6 +21,7 @@ app.use(cors({
     "https://www.geo-fs.com",
     "https://radarthing.com",
     "https://vstrips.xyzmani.com",
+    "http://localhost:3000",
   ],
 }));
 app.use(express.json());
