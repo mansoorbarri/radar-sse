@@ -48,10 +48,12 @@ router.post("/", async (req, res) => {
         // Only log occasionally to reduce noise (cache hits are frequent)
       } else {
         // Cache miss - query Convex and cache the result
+        const queryStart = Date.now();
         try {
           const user = await convex.query("users:getByGoogleId", {
             googleId: searchId,
           });
+          console.log(`[CACHE-MISS] Convex query took ${Date.now() - queryStart}ms for ${searchId}`);
 
           // Cache the result (even if null - prevents repeated lookups for unknown users)
           setCachedUser(searchId, user);
