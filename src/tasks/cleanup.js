@@ -11,7 +11,7 @@ function startTimeoutCheck() {
     let hasRemovals = false;
 
     for (const [id, aircraft] of aircraftMap.entries()) {
-      if (now - (aircraft.ts || 0) > 12000) {
+      if (now - (aircraft.ts || 0) > 30000) {
         const session = flightSessions.get(id);
         if (session) {
           console.log(
