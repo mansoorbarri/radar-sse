@@ -19,6 +19,7 @@ async function sendDiscordMissingImageNotification({
   try {
     const callsignText = callsign?.trim() || flightNo?.trim() || "Unknown";
     const aircraftText = `${airlineCode.toUpperCase()} ${aircraftType.toUpperCase()}`;
+    const routeText = flightNo?.trim() || "Unknown";
 
     await fetch(webhookUrl, {
       method: "POST",
@@ -26,7 +27,42 @@ async function sendDiscordMissingImageNotification({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        content: `Missing aircraft image requested.\nAircraft: ${aircraftText}\nCallsign: ${callsignText}`,
+        username: "RadarThing Alerts",
+        avatar_url: "https://radarthing.com/favicon.ico",
+        embeds: [
+          {
+            title: "Missing Aircraft Image",
+            description:
+              "A live aircraft was detected without a community image. Add one to improve tracking visuals.",
+            color: 440020, // RadarThing cyan accent (#06B6D4)
+            fields: [
+              {
+                name: "Aircraft",
+                value: `\`${aircraftText}\``,
+                inline: true,
+              },
+              {
+                name: "Callsign",
+                value: `\`${callsignText}\``,
+                inline: true,
+              },
+              {
+                name: "Flight No",
+                value: `\`${routeText}\``,
+                inline: true,
+              },
+              {
+                name: "Upload Image",
+                value: "https://radarthing.com/aircraft-images",
+                inline: false,
+              },
+            ],
+            footer: {
+              text: "RadarThing • Missing Image Queue",
+            },
+            timestamp: new Date().toISOString(),
+          },
+        ],
       }),
     });
   } catch (e) {
