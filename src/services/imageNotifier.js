@@ -94,8 +94,15 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType, callsign) {
       aircraftType: normalizedType,
     });
 
+    // Backward-compatible with older Convex mutation return shape:
+    // - New shape: { id, created: boolean }
+    // - Old shape: "id-string" (after we already checked `exists`, treat as newly created)
+    const wasCreated = typeof createResult === "string"
+      ? true
+      : createResult?.created === true;
+
     // Send Discord alert only if this request actually created a new DB record
-    if (createResult?.created) {
+    if (wasCreated) {
       await sendDiscordMissingImageNotification({
         airlineCode,
         aircraftType: normalizedType,
