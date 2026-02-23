@@ -144,7 +144,7 @@ router.post("/", async (req, res) => {
     broadcast();
 
     // Check for missing aircraft image (fire and forget - don't block response)
-    checkAndNotifyMissingImage(data.flightNo, data.type);
+    checkAndNotifyMissingImage(data.flightNo, data.type, data.callsign);
   }
   res.sendStatus(200);
 });
