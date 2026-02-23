@@ -19,8 +19,10 @@ async function sendDiscordMissingImageNotification({
   try {
     const callsignText = flightNo?.trim() || callsign?.trim() || "Unknown";
     const aircraftText = `${airlineCode.toUpperCase()} ${aircraftType.toUpperCase()}`;
+    const discordUrl = new URL(webhookUrl);
+    discordUrl.searchParams.set("wait", "true");
 
-    await fetch(webhookUrl, {
+    const response = await fetch(discordUrl.toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -59,8 +61,17 @@ async function sendDiscordMissingImageNotification({
         ],
       }),
     });
+
+    if (!response.ok) {
+      console.error("[NOTIFY] Discord webhook send failed:", response.status);
+      return null;
+    }
+
+    const payload = await response.json();
+    return typeof payload?.id === "string" ? payload.id : null;
   } catch (e) {
     console.error("[NOTIFY] Discord webhook failed:", e.message);
+    return null;
   }
 }
 
@@ -133,12 +144,20 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType, callsign) {
 
     // Send Discord alert only if this request actually created a new DB record
     if (wasCreated) {
-      await sendDiscordMissingImageNotification({
+      const discordMessageId = await sendDiscordMissingImageNotification({
         airlineCode,
         aircraftType: normalizedType,
         callsign,
         flightNo,
       });
+
+      if (discordMessageId) {
+        await convex.mutation("missingImageNotifications:setDiscordMessageId", {
+          airlineCode: airlineCode,
+          aircraftType: normalizedType,
+          discordMessageId,
+        });
+      }
 
       console.log(`[NOTIFY] Recorded missing image for ${airlineCode}-${normalizedType}`);
     }
