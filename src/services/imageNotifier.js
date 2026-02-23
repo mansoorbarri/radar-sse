@@ -17,9 +17,8 @@ async function sendDiscordMissingImageNotification({
   if (!webhookUrl) return;
 
   try {
-    const callsignText = callsign?.trim() || flightNo?.trim() || "Unknown";
+    const callsignText = flightNo?.trim() || callsign?.trim() || "Unknown";
     const aircraftText = `${airlineCode.toUpperCase()} ${aircraftType.toUpperCase()}`;
-    const routeText = flightNo?.trim() || "Unknown";
 
     await fetch(webhookUrl, {
       method: "POST",
@@ -44,11 +43,6 @@ async function sendDiscordMissingImageNotification({
               {
                 name: "Callsign",
                 value: `\`${callsignText}\``,
-                inline: true,
-              },
-              {
-                name: "Flight No",
-                value: `\`${routeText}\``,
                 inline: true,
               },
               {
