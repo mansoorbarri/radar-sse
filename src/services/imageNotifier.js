@@ -1,5 +1,6 @@
 const { convex } = require("../db");
 const { extractAirlineCode, normalizeAircraftType } = require("../utils/aircraft");
+const { isValidAirlineCode } = require("../utils/airlineCodes");
 const {
   getCachedApprovedImage,
   setCachedApprovedImage,
@@ -81,6 +82,9 @@ async function checkAndNotifyMissingImage(flightNo, aircraftType, callsign) {
 
   const airlineCode = extractAirlineCode(flightNo);
   if (!airlineCode) return;
+
+  // Skip invalid airline codes (military, junk, virtual airlines)
+  if (!isValidAirlineCode(airlineCode)) return;
 
   const normalizedType = normalizeAircraftType(aircraftType);
   if (!normalizedType) return; // Unknown aircraft type format
