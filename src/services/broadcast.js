@@ -1,4 +1,4 @@
-const { aircraftMap, getSubscribers } = require("../store");
+const { aircraftMap, onlineAirports, getSubscribers } = require("../store");
 
 // Throttle settings
 const BROADCAST_INTERVAL_MS = 500; // Max one broadcast per 500ms
@@ -40,6 +40,7 @@ function performBroadcast() {
       count: aircraftMap.size,
       aircraft: changed,
       removed: Array.from(removedAircraft),
+      onlineAirports: Array.from(onlineAirports.values()),
       timestamp: new Date().toISOString(),
     });
   } else {
@@ -48,6 +49,7 @@ function performBroadcast() {
       type: "full",
       count: aircraftMap.size,
       aircraft: Array.from(aircraftMap.values()),
+      onlineAirports: Array.from(onlineAirports.values()),
       timestamp: new Date().toISOString(),
     });
   }
@@ -96,6 +98,7 @@ function sendFullState(res) {
     type: "full",
     count: aircraftMap.size,
     aircraft: Array.from(aircraftMap.values()),
+    onlineAirports: Array.from(onlineAirports.values()),
     timestamp: new Date().toISOString(),
   });
   res.write(`data: ${message}\n\n`);
