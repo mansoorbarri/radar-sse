@@ -15,6 +15,9 @@ const commandQueue = new Map();
 // Sessions in grace period awaiting reconnection: convexUserId -> { session, originalId, disconnectedAt }
 const disconnectedSessions = new Map();
 
+// Airports with online ATC: icao -> { icao, user, discordInvite, activatedAt }
+const onlineAirports = new Map();
+
 // ============================================================================
 // CACHING LAYER - Reduces Convex function calls
 // ============================================================================
@@ -148,6 +151,7 @@ module.exports = {
   flightSessions,
   commandQueue,
   disconnectedSessions,
+  onlineAirports,
   getSubscribers,
   addSubscriber,
   removeSubscriber,
