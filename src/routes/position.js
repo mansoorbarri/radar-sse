@@ -9,7 +9,6 @@ const {
   setCachedUser,
 } = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
-const { checkAndNotifyMissingImage } = require("../services/imageNotifier");
 const { downsampleRoute } = require("../utils/route");
 
 const router = express.Router();
@@ -143,8 +142,6 @@ router.post("/", async (req, res) => {
     markAircraftChanged(data.id);
     broadcast();
 
-    // Check for missing aircraft image (fire and forget - don't block response)
-    checkAndNotifyMissingImage(data.flightNo, data.type, data.callsign);
   }
   res.sendStatus(200);
 });

@@ -30,7 +30,6 @@ src/
 │   └── route.js          # Route downsampling
 ├── services/
 │   ├── broadcast.js      # SSE broadcast to subscribers
-│   ├── imageNotifier.js  # Missing image detection
 │   └── session.js        # Flight finalization logic
 ├── routes/
 │   ├── position.js       # POST /api/atc/position
@@ -84,12 +83,10 @@ Backend-as-a-service for persistent storage. Key operations:
 
 **Queries:**
 - `users:getByGoogleId` - User lookup
-- `missingImageNotifications:exists` - Check notification status
 - `aircraftImages:getApprovedImage` - Get aircraft image
 
 **Mutations:**
 - `flights:create` - Save completed flight with route data
-- `missingImageNotifications:create` - Record missing image
 
 **Constraint:** Convex arrays limited to 8,192 elements. Route coordinates are downsampled to 8,000 max.
 
@@ -104,7 +101,6 @@ Backend-as-a-service for persistent storage. Key operations:
 |----------|----------|---------|
 | `CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` | Yes | Convex backend URL |
 | `PORT` | No | Server port (default: 3001) |
-| `DISCORD_MISSING_IMAGE_WEBHOOK` | No | Discord webhook for missing image alerts |
 
 ## Log Prefixes
 
