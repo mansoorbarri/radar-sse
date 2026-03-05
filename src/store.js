@@ -34,11 +34,6 @@ const userCache = new Map();
 // Caches aircraftImages:getApprovedImage results
 const approvedImageCache = new Map();
 
-// Notified combos cache: Set<"airlineCode-aircraftType">
-// Tracks combos we've already notified about (or checked notification exists)
-// This prevents repeated missingImageNotifications:exists queries
-const notifiedCombosCache = new Set();
-
 /**
  * Get user from cache or return undefined if not cached/expired
  * @param {string} googleId
@@ -97,34 +92,6 @@ function setCachedApprovedImage(airlineCode, aircraftType, exists) {
 }
 
 /**
- * Check if we've already processed this airline+aircraft combo for notifications
- * @param {string} airlineCode
- * @param {string} aircraftType
- * @returns {boolean}
- */
-function hasNotifiedCombo(airlineCode, aircraftType) {
-  return notifiedCombosCache.has(`${airlineCode}-${aircraftType}`);
-}
-
-/**
- * Mark a combo as notified/checked
- * @param {string} airlineCode
- * @param {string} aircraftType
- */
-function markComboNotified(airlineCode, aircraftType) {
-  notifiedCombosCache.add(`${airlineCode}-${aircraftType}`);
-}
-
-/**
- * Clear a combo from notified cache (e.g., when an image is approved)
- * @param {string} airlineCode
- * @param {string} aircraftType
- */
-function clearNotifiedCombo(airlineCode, aircraftType) {
-  notifiedCombosCache.delete(`${airlineCode}-${aircraftType}`);
-}
-
-/**
  * Invalidate image cache for a combo (e.g., when an image is approved)
  * @param {string} airlineCode
  * @param {string} aircraftType
@@ -161,9 +128,5 @@ module.exports = {
   // Approved image cache
   getCachedApprovedImage,
   setCachedApprovedImage,
-  // Notified combos cache
-  hasNotifiedCombo,
-  markComboNotified,
-  clearNotifiedCombo,
   invalidateImageCache,
 };
