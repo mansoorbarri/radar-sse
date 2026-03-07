@@ -1,5 +1,5 @@
 const express = require("express");
-const { onlineAirports } = require("../store");
+const { onlineAirports, persistOnlineAirports } = require("../store");
 const { broadcast } = require("../services/broadcast");
 
 const onlineRouter = express.Router();
@@ -38,6 +38,7 @@ onlineRouter.post("/", (req, res) => {
     });
 
     console.log(`[ATC] ${user} (${discordUserId || "unknown"}) marked ${icao} as online (control)`);
+    persistOnlineAirports();
     broadcast();
     return res.json({ success: true, icao, position: "control" });
   }
@@ -79,23 +80,10 @@ onlineRouter.post("/", (req, res) => {
     return res.status(409).json({ error: `${position} at ${icao} is already staffed by ${entry.controllers.find((c) => c.position === position).user}` });
   }
 
-  // Validate top-down: new controller's position + existing positions must not create gaps
-  // A gap would be: someone at control and someone at delivery with no one at tower or ground
-  // Rule: the set of taken positions must be contiguous from the top
-  const newPositions = [...takenPositions, position].sort((a, b) => POSITIONS.indexOf(a) - POSITIONS.indexOf(b));
-
-  // Check contiguity: each taken position must be adjacent in the hierarchy to the next
-  for (let i = 0; i < newPositions.length - 1; i++) {
-    const currentIdx = POSITIONS.indexOf(newPositions[i]);
-    const nextIdx = POSITIONS.indexOf(newPositions[i + 1]);
-    if (nextIdx - currentIdx > 1) {
-      // There's a gap — this would violate top-down
-      const missingPositions = POSITIONS.slice(currentIdx + 1, nextIdx);
-      return res.status(400).json({
-        error: `Top-down violation: adding ${position} would leave ${missingPositions.join(", ")} unstaffed between ${newPositions[i]} and ${newPositions[i + 1]}`,
-      });
-    }
-  }
+  // Top-down: any position below the highest staffed position is valid,
+  // since higher positions inherently cover lower ones via top-down inheritance.
+  // The first controller always gets "control" (the top), so subsequent
+  // controllers can take any available position below.
 
   // Add the new controller
   entry.controllers.push({
@@ -109,6 +97,7 @@ onlineRouter.post("/", (req, res) => {
   entry.controllers.sort((a, b) => POSITIONS.indexOf(a.position) - POSITIONS.indexOf(b.position));
 
   console.log(`[ATC] ${user} (${discordUserId || "unknown"}) marked ${icao} as ${position}`);
+  persistOnlineAirports();
   broadcast();
   return res.json({ success: true, icao, position });
 });
@@ -153,6 +142,7 @@ offlineRouter.post("/", (req, res) => {
     }
   }
 
+  persistOnlineAirports();
   broadcast();
   res.json({ success: true, icao });
 });

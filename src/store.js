@@ -1,3 +1,6 @@
+const fs = require("fs");
+const path = require("path");
+
 // In-memory data stores
 
 // Current aircraft positions: id -> aircraft_data
@@ -17,6 +20,40 @@ const disconnectedSessions = new Map();
 
 // Airports with online ATC: icao -> { icao, user, discordInvite, activatedAt }
 const onlineAirports = new Map();
+
+// ============================================================================
+// PERSISTENCE - Survive restarts for online airports
+// ============================================================================
+
+const ATC_PERSIST_PATH = path.join(__dirname, "..", "data", "online-airports.json");
+
+function persistOnlineAirports() {
+  try {
+    const dir = path.dirname(ATC_PERSIST_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const data = Object.fromEntries(onlineAirports);
+    fs.writeFileSync(ATC_PERSIST_PATH, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error("[PERSIST] Failed to save online airports:", err.message);
+  }
+}
+
+function restoreOnlineAirports() {
+  try {
+    if (!fs.existsSync(ATC_PERSIST_PATH)) return;
+    const raw = fs.readFileSync(ATC_PERSIST_PATH, "utf-8");
+    const data = JSON.parse(raw);
+    for (const [icao, entry] of Object.entries(data)) {
+      onlineAirports.set(icao, entry);
+    }
+    console.log(`[PERSIST] Restored ${onlineAirports.size} online airport(s)`);
+  } catch (err) {
+    console.error("[PERSIST] Failed to restore online airports:", err.message);
+  }
+}
+
+// Restore on module load
+restoreOnlineAirports();
 
 // ============================================================================
 // CACHING LAYER - Reduces Convex function calls
@@ -129,4 +166,6 @@ module.exports = {
   getCachedApprovedImage,
   setCachedApprovedImage,
   invalidateImageCache,
+  // Persistence
+  persistOnlineAirports,
 };

@@ -49,3 +49,6 @@ yarn-error.log*
 ## INTERNAL
 todo.md
 /generated/prisma
+
+# persisted runtime data
+/data
