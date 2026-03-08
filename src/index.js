@@ -14,6 +14,7 @@ const { onlineRouter: airportsOnlineRouter, offlineRouter: airportsOfflineRouter
 
 // Import background tasks
 const { startAllTasks } = require("./tasks/cleanup");
+const { persistFlightSessions, persistOnlineAirports } = require("./store");
 
 const app = express();
 
@@ -43,3 +44,15 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`[SSE Server] Running on http://localhost:${PORT}`);
 });
+
+// Graceful shutdown - persist in-memory state before exit
+function gracefulShutdown(signal) {
+  console.log(`[SHUTDOWN] Received ${signal}, persisting state...`);
+  persistFlightSessions();
+  persistOnlineAirports();
+  console.log("[SHUTDOWN] State persisted, exiting.");
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));

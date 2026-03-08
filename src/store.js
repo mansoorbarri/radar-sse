@@ -26,6 +26,7 @@ const onlineAirports = new Map();
 // ============================================================================
 
 const ATC_PERSIST_PATH = path.join(__dirname, "..", "data", "online-airports.json");
+const FLIGHTS_PERSIST_PATH = path.join(__dirname, "..", "data", "flight-sessions.json");
 
 function persistOnlineAirports() {
   try {
@@ -52,8 +53,85 @@ function restoreOnlineAirports() {
   }
 }
 
+function persistFlightSessions() {
+  try {
+    const dir = path.dirname(FLIGHTS_PERSIST_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const sessions = {};
+    for (const [id, session] of flightSessions) {
+      sessions[id] = {
+        ...session,
+        startTime: session.startTime instanceof Date ? session.startTime.toISOString() : session.startTime,
+      };
+    }
+
+    const disconnected = {};
+    for (const [userId, data] of disconnectedSessions) {
+      disconnected[userId] = {
+        ...data,
+        session: {
+          ...data.session,
+          startTime: data.session.startTime instanceof Date ? data.session.startTime.toISOString() : data.session.startTime,
+        },
+      };
+    }
+
+    fs.writeFileSync(FLIGHTS_PERSIST_PATH, JSON.stringify({ sessions, disconnected }, null, 2));
+    const total = Object.keys(sessions).length + Object.keys(disconnected).length;
+    if (total > 0) {
+      console.log(`[PERSIST] Saved ${Object.keys(sessions).length} active + ${Object.keys(disconnected).length} disconnected flight session(s)`);
+    }
+  } catch (err) {
+    console.error("[PERSIST] Failed to save flight sessions:", err.message);
+  }
+}
+
+function restoreFlightSessions() {
+  try {
+    if (!fs.existsSync(FLIGHTS_PERSIST_PATH)) return;
+    const raw = fs.readFileSync(FLIGHTS_PERSIST_PATH, "utf-8");
+    const data = JSON.parse(raw);
+
+    if (data.sessions) {
+      for (const [id, session] of Object.entries(data.sessions)) {
+        session.startTime = new Date(session.startTime);
+        // Move all previously active sessions into disconnectedSessions
+        // so they can be reclaimed when the client reconnects with a new ID
+        if (session.convexUserId) {
+          disconnectedSessions.set(session.convexUserId, {
+            session,
+            originalId: id,
+            disconnectedAt: Date.now(),
+          });
+        }
+      }
+    }
+
+    if (data.disconnected) {
+      for (const [userId, entry] of Object.entries(data.disconnected)) {
+        entry.session.startTime = new Date(entry.session.startTime);
+        // Reset the disconnect timer so the full grace period applies from restart
+        entry.disconnectedAt = Date.now();
+        disconnectedSessions.set(userId, entry);
+      }
+    }
+
+    const total = disconnectedSessions.size;
+    if (total > 0) {
+      console.log(`[PERSIST] Restored ${total} flight session(s) into disconnected pool`);
+    }
+
+    // Clean up the persist file after restoring
+    fs.unlinkSync(FLIGHTS_PERSIST_PATH);
+  } catch (err) {
+    console.error("[PERSIST] Failed to restore flight sessions:", err.message);
+  }
+}
+
 // Restore on module load
 restoreOnlineAirports();
+restoreFlightSessions();
 
 // ============================================================================
 // CACHING LAYER - Reduces Convex function calls
@@ -168,4 +246,5 @@ module.exports = {
   invalidateImageCache,
   // Persistence
   persistOnlineAirports,
+  persistFlightSessions,
 };
