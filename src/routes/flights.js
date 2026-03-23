@@ -7,6 +7,99 @@ const { finalizeFlight, finalizeDisconnectedSession } = require("../services/ses
 
 const router = express.Router();
 
+function normalizeFlightIdentifier(value) {
+  return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
+async function findSessionByQuery({ id, callsign, googleId }) {
+  if (id && flightSessions.has(id)) {
+    return {
+      state: "active",
+      aircraftId: id,
+      session: flightSessions.get(id),
+    };
+  }
+
+  const normalizedCallsign = normalizeFlightIdentifier(callsign);
+  if (normalizedCallsign) {
+    for (const [aircraftId, session] of flightSessions.entries()) {
+      const identifiers = [
+        normalizeFlightIdentifier(session.flightNo),
+        normalizeFlightIdentifier(session.callsign),
+      ];
+      if (identifiers.includes(normalizedCallsign)) {
+        return {
+          state: "active",
+          aircraftId,
+          session,
+        };
+      }
+    }
+  }
+
+  let convexUserId = null;
+  if (googleId) {
+    const user = await convex.query("users:getByGoogleId", {
+      googleId: String(googleId),
+    });
+    convexUserId = user?._id ?? null;
+
+    if (convexUserId) {
+      for (const [aircraftId, session] of flightSessions.entries()) {
+        if (session.convexUserId === convexUserId) {
+          return {
+            state: "active",
+            aircraftId,
+            session,
+          };
+        }
+      }
+    }
+  }
+
+  if (id) {
+    for (const [sessionUserId, data] of disconnectedSessions.entries()) {
+      if (data.originalId === id) {
+        return {
+          state: "disconnected",
+          aircraftId: data.originalId,
+          convexUserId: sessionUserId,
+          session: data.session,
+        };
+      }
+    }
+  }
+
+  if (normalizedCallsign) {
+    for (const [sessionUserId, data] of disconnectedSessions.entries()) {
+      const identifiers = [
+        normalizeFlightIdentifier(data.session.flightNo),
+        normalizeFlightIdentifier(data.session.callsign),
+      ];
+      if (identifiers.includes(normalizedCallsign)) {
+        return {
+          state: "disconnected",
+          aircraftId: data.originalId,
+          convexUserId: sessionUserId,
+          session: data.session,
+        };
+      }
+    }
+  }
+
+  if (convexUserId && disconnectedSessions.has(convexUserId)) {
+    const data = disconnectedSessions.get(convexUserId);
+    return {
+      state: "disconnected",
+      aircraftId: data.originalId,
+      convexUserId,
+      session: data.session,
+    };
+  }
+
+  return null;
+}
+
 // List failed sessions that can be retried
 router.get("/failed-flights", (req, res) => {
   const failed = [];
@@ -47,6 +140,55 @@ router.get("/failed-flights", (req, res) => {
   }
 
   res.json({ failed, count: failed.length });
+});
+
+router.get("/active-flight-path", async (req, res) => {
+  const id =
+    typeof req.query.id === "string" ? req.query.id.trim() : undefined;
+  const callsign =
+    typeof req.query.callsign === "string"
+      ? req.query.callsign.trim()
+      : undefined;
+  const googleId =
+    typeof req.query.googleId === "string"
+      ? req.query.googleId.trim()
+      : undefined;
+
+  if (!id && !callsign && !googleId) {
+    return res.status(400).json({
+      error: "Missing id, callsign, or googleId",
+    });
+  }
+
+  try {
+    const match = await findSessionByQuery({ id, callsign, googleId });
+
+    if (!match || !match.session) {
+      return res.status(404).json({
+        error: "No active flight session found",
+      });
+    }
+
+    return res.json({
+      state: match.state,
+      aircraftId: match.aircraftId,
+      callsign: match.session.flightNo || match.session.callsign,
+      aircraftType: match.session.aircraftType,
+      depICAO: match.session.departure,
+      arrICAO: match.session.arrival,
+      startTime:
+        match.session.startTime instanceof Date
+          ? match.session.startTime.getTime()
+          : new Date(match.session.startTime).getTime(),
+      endTime: match.session.endTime || undefined,
+      routeData: match.session.coords,
+    });
+  } catch (error) {
+    console.error("[ACTIVE-FLIGHT-PATH] Failed to fetch active session:", error);
+    return res.status(500).json({
+      error: "Failed to fetch active flight path",
+    });
+  }
 });
 
 // Retry saving a failed flight (manual retry resets the counter for 3 more attempts)
