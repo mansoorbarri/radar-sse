@@ -21,6 +21,7 @@ const app = express();
 app.use(cors({
   origin: [
     "https://www.geo-fs.com",
+    "https://beta.geo-fs.com",
     "https://radarthing.com",
     "https://vstrips.xyzmani.com",
     "http://localhost:3000",
