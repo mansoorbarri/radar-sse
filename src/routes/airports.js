@@ -1,6 +1,7 @@
 const express = require("express");
 const { onlineAirports, persistOnlineAirports } = require("../store");
 const { broadcast } = require("../services/broadcast");
+const { normalizeAirportController } = require("../utils/display");
 
 const onlineRouter = express.Router();
 const offlineRouter = express.Router();
@@ -21,6 +22,9 @@ onlineRouter.post("/", (req, res) => {
   }
 
   const entry = onlineAirports.get(icao);
+  if (entry) {
+    entry.controllers = entry.controllers.map(normalizeAirportController);
+  }
 
   // No existing controllers — first controller auto-assigned "control"
   if (!entry) {
@@ -28,12 +32,12 @@ onlineRouter.post("/", (req, res) => {
       icao,
       discordInvite: "https://discord.gg/pbQF4txdRC",
       controllers: [
-        {
+        normalizeAirportController({
           user,
           discordUserId: discordUserId || null,
           position: "control",
           activatedAt: Date.now(),
-        },
+        }),
       ],
     });
 
@@ -66,6 +70,8 @@ onlineRouter.post("/", (req, res) => {
       availablePositions,
       existingControllers: entry.controllers.map((c) => ({
         user: c.user,
+        discordUsername: c.discordUsername || c.user,
+        displayName: c.displayName || c.discordUsername || c.user,
         position: c.position,
       })),
     });
@@ -86,12 +92,12 @@ onlineRouter.post("/", (req, res) => {
   // controllers can take any available position below.
 
   // Add the new controller
-  entry.controllers.push({
+  entry.controllers.push(normalizeAirportController({
     user,
     discordUserId: discordUserId || null,
     position,
     activatedAt: Date.now(),
-  });
+  }));
 
   // Sort controllers by hierarchy position (top to bottom)
   entry.controllers.sort((a, b) => POSITIONS.indexOf(a.position) - POSITIONS.indexOf(b.position));
@@ -114,6 +120,8 @@ offlineRouter.post("/", (req, res) => {
   if (!entry) {
     return res.status(404).json({ error: `${icao} is not currently online` });
   }
+
+  entry.controllers = entry.controllers.map(normalizeAirportController);
 
   // Find the controller to remove
   const controllerIdx = entry.controllers.findIndex((c) => c.discordUserId === discordUserId);
@@ -138,6 +146,7 @@ offlineRouter.post("/", (req, res) => {
     } else if (entry.controllers.length === 1) {
       // Only one controller left — they become "control" (covers all)
       entry.controllers[0].position = "control";
+      entry.controllers[0] = normalizeAirportController(entry.controllers[0]);
       console.log(`[ATC] ${entry.controllers[0].user} now covers all positions at ${icao}`);
     }
   }
