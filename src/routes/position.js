@@ -10,7 +10,10 @@ const {
 } = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { downsampleRoute } = require("../utils/route");
-const { buildAircraftDisplayFields } = require("../utils/display");
+const {
+  buildAircraftDisplayFields,
+  buildAuthLogIdentity,
+} = require("../utils/display");
 
 const router = express.Router();
 
@@ -61,14 +64,23 @@ router.post("/", async (req, res) => {
           if (user) {
             role = user.role;
             convexUserId = user._id;
+            const authIdentity = buildAuthLogIdentity({
+              aircraft: data,
+              user,
+              googleId: searchId,
+            });
             console.log(
-              `[AUTH] Found ${user.clerkId} | Role: ${role} | ID: ${convexUserId}`
+              `[AUTH] ${authIdentity} | Role: ${role}`
             );
           } else {
             // Explicitly default to FREE when user not found
             role = "FREE";
+            const authIdentity = buildAuthLogIdentity({
+              aircraft: data,
+              googleId: searchId,
+            });
             console.log(
-              `[AUTH] No user found for ID: ${searchId} - defaulting to FREE`
+              `[AUTH] No user found for ${authIdentity} - defaulting to FREE`
             );
           }
         } catch (e) {

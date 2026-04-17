@@ -43,6 +43,26 @@ function buildAircraftDisplayFields({ aircraft, user } = {}) {
   };
 }
 
+function buildAuthLogIdentity({ aircraft, user, googleId } = {}) {
+  const { discordUsername, flightCallsign } = buildAircraftDisplayFields({
+    aircraft,
+    user,
+  });
+
+  const parts = [];
+  if (flightCallsign) {
+    parts.push(`Callsign: ${flightCallsign}`);
+  }
+  if (discordUsername) {
+    parts.push(`Discord: ${discordUsername}`);
+  }
+  if (parts.length === 0 && googleId) {
+    parts.push(`GoogleID: ${googleId}`);
+  }
+
+  return parts.join(" | ");
+}
+
 function normalizeAirportController(controller) {
   const discordUsername = firstNonEmptyString(
     controller?.discordUsername,
@@ -68,6 +88,7 @@ function normalizeAirportEntry(entry) {
 }
 
 module.exports = {
+  buildAuthLogIdentity,
   buildAircraftDisplayFields,
   normalizeAirportController,
   normalizeAirportEntry,
