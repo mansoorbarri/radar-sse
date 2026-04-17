@@ -50,15 +50,13 @@ function buildAuthLogIdentity({ aircraft, user, googleId } = {}) {
   });
 
   const parts = [];
-  if (flightCallsign) {
-    parts.push(`Callsign: ${flightCallsign}`);
+  if (googleId) {
+    parts.push(`ID: ${googleId}`);
   }
   if (discordUsername) {
     parts.push(`Discord: ${discordUsername}`);
   }
-  if (parts.length === 0 && googleId) {
-    parts.push(`GoogleID: ${googleId}`);
-  }
+  parts.push(`Callsign: ${flightCallsign || "Unknown"}`);
 
   return parts.join(" | ");
 }
