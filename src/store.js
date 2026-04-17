@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { normalizeAirportEntry } = require("./utils/display");
 
 // In-memory data stores
 
@@ -45,7 +46,7 @@ function restoreOnlineAirports() {
     const raw = fs.readFileSync(ATC_PERSIST_PATH, "utf-8");
     const data = JSON.parse(raw);
     for (const [icao, entry] of Object.entries(data)) {
-      onlineAirports.set(icao, entry);
+      onlineAirports.set(icao, normalizeAirportEntry(entry));
     }
     console.log(`[PERSIST] Restored ${onlineAirports.size} online airport(s)`);
   } catch (err) {

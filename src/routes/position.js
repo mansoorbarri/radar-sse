@@ -10,6 +10,7 @@ const {
 } = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { downsampleRoute } = require("../utils/route");
+const { buildAircraftDisplayFields } = require("../utils/display");
 
 const router = express.Router();
 
@@ -35,6 +36,7 @@ router.post("/", async (req, res) => {
     let role = "FREE"; // Default to FREE
     const airlineLogo = null;
     let convexUserId = null;
+    let user = null;
 
     if (data.googleId) {
       const searchId = String(data.googleId);
@@ -42,13 +44,14 @@ router.post("/", async (req, res) => {
       // Check cache first to avoid Convex query
       const cached = getCachedUser(searchId);
       if (cached) {
+        user = cached.user;
         role = cached.role;
         convexUserId = cached.convexUserId;
         // Only log occasionally to reduce noise (cache hits are frequent)
       } else {
         // Cache miss - query Convex and cache the result
         try {
-          const user = await convex.query("users:getByGoogleId", {
+          user = await convex.query("users:getByGoogleId", {
             googleId: searchId,
           });
 
@@ -75,6 +78,11 @@ router.post("/", async (req, res) => {
         }
       }
     }
+
+    const displayFields = buildAircraftDisplayFields({
+      aircraft: data,
+      user,
+    });
 
     // Log flights for ALL signed-in users (viewing history is restricted in frontend)
     if (convexUserId) {
@@ -135,6 +143,7 @@ router.post("/", async (req, res) => {
 
     aircraftMap.set(data.id, {
       ...data,
+      ...displayFields,
       role,
       airlineLogo,
       ts: Date.now(),
