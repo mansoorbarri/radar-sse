@@ -16,10 +16,35 @@ const {
 } = require("../utils/display");
 
 const router = express.Router();
+const STATS_MAX_SPEED_KTS = 750;
+const STATS_EXCLUDED_SPEED_REASON = "speed_over_750_kts";
+const EARTH_RADIUS_NM = 3440.065;
+
+function toRad(value) {
+  return value * (Math.PI / 180);
+}
+
+function haversineDistanceNm(lat1, lon1, lat2, lon2) {
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return EARTH_RADIUS_NM * c;
+}
 
 // Add coordinate to session with memory limit enforcement
 function addCoordToSession(session, lat, lon) {
   const last = session.coords[session.coords.length - 1];
+  if (!last) {
+    session.coords.push([lat, lon]);
+    return;
+  }
+
   // Only add if moved enough
   if (Math.abs(last[0] - lat) > 0.0002 || Math.abs(last[1] - lon) > 0.0002) {
     session.coords.push([lat, lon]);
@@ -33,9 +58,51 @@ function addCoordToSession(session, lat, lon) {
   }
 }
 
+function updateSessionPosition(session, data, receivedAt) {
+  const lat = Number(data.lat);
+  const lon = Number(data.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+
+  const previousCoord =
+    Array.isArray(session.lastCoord) && session.lastCoord.length >= 2
+      ? session.lastCoord
+      : session.coords[session.coords.length - 1];
+  const previousAt =
+    typeof session.lastCoordAt === "number" ? session.lastCoordAt : undefined;
+
+  if (
+    previousCoord &&
+    Number.isFinite(previousCoord[0]) &&
+    Number.isFinite(previousCoord[1]) &&
+    previousAt !== undefined &&
+    receivedAt > previousAt
+  ) {
+    const elapsedHours = (receivedAt - previousAt) / 3600000;
+    const distanceNm = haversineDistanceNm(
+      previousCoord[0],
+      previousCoord[1],
+      lat,
+      lon,
+    );
+    const observedSpeedKts = distanceNm / elapsedHours;
+
+    if (Number.isFinite(observedSpeedKts)) {
+      session.maxSpeed = Math.max(session.maxSpeed || 0, observedSpeedKts);
+      if (observedSpeedKts > STATS_MAX_SPEED_KTS) {
+        session.statsExcludedReason = STATS_EXCLUDED_SPEED_REASON;
+      }
+    }
+  }
+
+  addCoordToSession(session, lat, lon);
+  session.lastCoord = [lat, lon];
+  session.lastCoordAt = receivedAt;
+}
+
 router.post("/", async (req, res) => {
   const data = req.body;
   if (data.id) {
+    const receivedAt = Date.now();
     let role = "FREE"; // Default to FREE
     const airlineLogo = null;
     let convexUserId = null;
@@ -107,8 +174,7 @@ router.post("/", async (req, res) => {
         flightSessions.set(data.id, session);
         disconnectedSessions.delete(convexUserId);
 
-        // Add current position
-        addCoordToSession(session, data.lat, data.lon);
+        updateSessionPosition(session, data, receivedAt);
         // Update squawk if provided
         if (data.squawk) {
           session.squawk = data.squawk;
@@ -117,11 +183,10 @@ router.post("/", async (req, res) => {
         if (data.altMSL && data.altMSL > session.maxAltitude) {
           session.maxAltitude = data.altMSL;
         }
-        if (data.speed && data.speed > session.maxSpeed) {
-          session.maxSpeed = data.speed;
-        }
       } else if (!flightSessions.has(data.id)) {
         // New flight session
+        const lat = Number(data.lat);
+        const lon = Number(data.lon);
         flightSessions.set(data.id, {
           convexUserId: convexUserId,
           callsign: data.callsign || "Unknown",
@@ -131,14 +196,18 @@ router.post("/", async (req, res) => {
           arrival: data.arrival || "???",
           squawk: data.squawk || null,
           maxAltitude: data.altMSL || 0,
-          maxSpeed: data.speed || 0,
-          coords: [[data.lat, data.lon]],
+          maxSpeed: 0,
+          coords:
+            Number.isFinite(lat) && Number.isFinite(lon) ? [[lat, lon]] : [],
+          lastCoord:
+            Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null,
+          lastCoordAt: receivedAt,
           startTime: new Date(),
         });
       } else {
         // Existing active session - add coordinates and update max values
         const session = flightSessions.get(data.id);
-        addCoordToSession(session, data.lat, data.lon);
+        updateSessionPosition(session, data, receivedAt);
         // Update squawk if provided
         if (data.squawk) {
           session.squawk = data.squawk;
@@ -146,9 +215,6 @@ router.post("/", async (req, res) => {
         // Track max altitude and speed
         if (data.altMSL && data.altMSL > session.maxAltitude) {
           session.maxAltitude = data.altMSL;
-        }
-        if (data.speed && data.speed > session.maxSpeed) {
-          session.maxSpeed = data.speed;
         }
       }
     }
@@ -158,7 +224,7 @@ router.post("/", async (req, res) => {
       ...displayFields,
       role,
       airlineLogo,
-      ts: Date.now(),
+      ts: receivedAt,
     });
     markAircraftChanged(data.id);
     broadcast();
