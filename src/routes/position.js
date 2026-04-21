@@ -16,9 +16,45 @@ const {
 } = require("../utils/display");
 
 const router = express.Router();
-const STATS_MAX_SPEED_KTS = 750;
-const STATS_EXCLUDED_SPEED_REASON = "speed_over_750_kts";
+const DEFAULT_STATS_MAX_SPEED_KTS = 750;
+const HIGH_PERFORMANCE_STATS_MAX_SPEED_KTS = 1100;
+const STATS_EXCLUDED_SPEED_REASON = "speed_over_stats_limit";
 const EARTH_RADIUS_NM = 3440.065;
+
+function isHighPerformanceStatsAircraft(aircraftType) {
+  const normalized = String(aircraftType || "").trim().toUpperCase();
+  if (!normalized) return false;
+
+  if (normalized.includes("CONCORDE")) return true;
+
+  return (
+    /\bF\/?A-?\d{1,3}[A-Z]?\b/.test(normalized) ||
+    /\bF-?\d{1,3}[A-Z]?\b/.test(normalized) ||
+    /\b[ABT]-\d{1,3}[A-Z]?\b/.test(normalized) ||
+    /\bSR-?71\b/.test(normalized) ||
+    /\bYF-?\d{1,3}[A-Z]?\b/.test(normalized) ||
+    /\bMIG-?\d{1,3}[A-Z]?\b/.test(normalized) ||
+    /\bSU-?\d{1,3}[A-Z]?\b/.test(normalized) ||
+    /\bJAS-?\d{1,3}[A-Z]?\b/.test(normalized) ||
+    /\bEUROFIGHTER\b/.test(normalized) ||
+    /\bTYPHOON\b/.test(normalized) ||
+    /\bRAFALE\b/.test(normalized) ||
+    /\bMIRAGE\b/.test(normalized) ||
+    /\bGRIPEN\b/.test(normalized) ||
+    /\bTORNADO\b/.test(normalized) ||
+    /\bHARRIER\b/.test(normalized) ||
+    /\bPHANTOM\b/.test(normalized) ||
+    /\bVIGGEN\b/.test(normalized) ||
+    /\bSUKHOI\b/.test(normalized) ||
+    /\bMIKOYAN\b/.test(normalized)
+  );
+}
+
+function getStatsMaxSpeedKts(aircraftType) {
+  return isHighPerformanceStatsAircraft(aircraftType)
+    ? HIGH_PERFORMANCE_STATS_MAX_SPEED_KTS
+    : DEFAULT_STATS_MAX_SPEED_KTS;
+}
 
 function toRad(value) {
   return value * (Math.PI / 180);
@@ -88,7 +124,7 @@ function updateSessionPosition(session, data, receivedAt) {
 
     if (Number.isFinite(observedSpeedKts)) {
       session.maxSpeed = Math.max(session.maxSpeed || 0, observedSpeedKts);
-      if (observedSpeedKts > STATS_MAX_SPEED_KTS) {
+      if (observedSpeedKts > getStatsMaxSpeedKts(session.aircraftType)) {
         session.statsExcludedReason = STATS_EXCLUDED_SPEED_REASON;
       }
     }
