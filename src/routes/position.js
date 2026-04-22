@@ -91,9 +91,9 @@ function isValidCoordinate(lat, lon) {
 }
 
 function getReportedSpeedKts(data) {
-  const groundSpeed = Number(data.groundSpeed);
   const indicatedSpeed = Number(data.speed);
-  const speed = Number.isFinite(groundSpeed) ? groundSpeed : indicatedSpeed;
+  const groundSpeed = Number(data.groundSpeed);
+  const speed = Number.isFinite(indicatedSpeed) ? indicatedSpeed : groundSpeed;
 
   if (
     !Number.isFinite(speed) ||
