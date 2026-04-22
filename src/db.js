@@ -1,8 +1,13 @@
 const { ConvexHttpClient } = require("convex/browser");
+const { createLogger } = require("./utils/logger");
+
+const log = createLogger("db");
 
 const convexUrl = process.env.CONVEX_URL || process.env.NEXT_PUBLIC_CONVEX_URL;
 if (!convexUrl) {
-  console.error("CONVEX_URL or NEXT_PUBLIC_CONVEX_URL environment variable is required");
+  log.error("Missing Convex URL environment variable", {
+    requiredEnv: ["CONVEX_URL", "NEXT_PUBLIC_CONVEX_URL"],
+  });
   process.exit(1);
 }
 

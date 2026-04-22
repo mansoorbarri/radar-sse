@@ -1,7 +1,9 @@
 const express = require("express");
 const { aircraftMap, commandQueue } = require("../store");
+const { createLogger } = require("../utils/logger");
 
 const router = express.Router();
+const log = createLogger("commands");
 
 // Send command to an aircraft (called from RadarThing web app)
 router.post("/", (req, res) => {
@@ -37,7 +39,14 @@ router.post("/", (req, res) => {
   });
   commandQueue.set(aircraftId, commands);
 
-  console.log(`[CMD] Queued ${command.type} for ${aircraftId}`);
+  log.info("Queued aircraft command", {
+    aircraftId,
+    commandType: command.type,
+    targetId,
+    targetCallsign,
+    targetGoogleId,
+    queueLength: commands.length,
+  });
   res.json({ success: true, queueLength: commands.length });
 });
 
@@ -49,7 +58,11 @@ router.get("/:id", (req, res) => {
   // Clear the queue after fetching
   if (commands.length > 0) {
     commandQueue.delete(id);
-    console.log(`[CMD] Delivered ${commands.length} commands to ${id}`);
+    log.info("Delivered queued aircraft commands", {
+      aircraftId: id,
+      deliveredCommands: commands.length,
+      commandTypes: commands.map((command) => command.type),
+    });
   }
 
   res.json({ commands });

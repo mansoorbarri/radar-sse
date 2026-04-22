@@ -1,6 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 const { normalizeAirportEntry } = require("./utils/display");
+const { createLogger } = require("./utils/logger");
+
+const log = createLogger("store");
 
 // In-memory data stores
 
@@ -36,7 +39,11 @@ function persistOnlineAirports() {
     const data = Object.fromEntries(onlineAirports);
     fs.writeFileSync(ATC_PERSIST_PATH, JSON.stringify(data, null, 2));
   } catch (err) {
-    console.error("[PERSIST] Failed to save online airports:", err.message);
+    log.error("Failed to save online airports", {
+      path: ATC_PERSIST_PATH,
+      onlineAirports: onlineAirports.size,
+      error: err,
+    });
   }
 }
 
@@ -48,9 +55,15 @@ function restoreOnlineAirports() {
     for (const [icao, entry] of Object.entries(data)) {
       onlineAirports.set(icao, normalizeAirportEntry(entry));
     }
-    console.log(`[PERSIST] Restored ${onlineAirports.size} online airport(s)`);
+    log.info("Restored online airports", {
+      path: ATC_PERSIST_PATH,
+      onlineAirports: onlineAirports.size,
+    });
   } catch (err) {
-    console.error("[PERSIST] Failed to restore online airports:", err.message);
+    log.error("Failed to restore online airports", {
+      path: ATC_PERSIST_PATH,
+      error: err,
+    });
   }
 }
 
@@ -81,10 +94,20 @@ function persistFlightSessions() {
     fs.writeFileSync(FLIGHTS_PERSIST_PATH, JSON.stringify({ sessions, disconnected }, null, 2));
     const total = Object.keys(sessions).length + Object.keys(disconnected).length;
     if (total > 0) {
-      console.log(`[PERSIST] Saved ${Object.keys(sessions).length} active + ${Object.keys(disconnected).length} disconnected flight session(s)`);
+      log.info("Saved flight sessions", {
+        path: FLIGHTS_PERSIST_PATH,
+        activeSessions: Object.keys(sessions).length,
+        disconnectedSessions: Object.keys(disconnected).length,
+        total,
+      });
     }
   } catch (err) {
-    console.error("[PERSIST] Failed to save flight sessions:", err.message);
+    log.error("Failed to save flight sessions", {
+      path: FLIGHTS_PERSIST_PATH,
+      activeSessions: flightSessions.size,
+      disconnectedSessions: disconnectedSessions.size,
+      error: err,
+    });
   }
 }
 
@@ -120,13 +143,19 @@ function restoreFlightSessions() {
 
     const total = disconnectedSessions.size;
     if (total > 0) {
-      console.log(`[PERSIST] Restored ${total} flight session(s) into disconnected pool`);
+      log.info("Restored flight sessions into disconnected pool", {
+        path: FLIGHTS_PERSIST_PATH,
+        disconnectedSessions: total,
+      });
     }
 
     // Clean up the persist file after restoring
     fs.unlinkSync(FLIGHTS_PERSIST_PATH);
   } catch (err) {
-    console.error("[PERSIST] Failed to restore flight sessions:", err.message);
+    log.error("Failed to restore flight sessions", {
+      path: FLIGHTS_PERSIST_PATH,
+      error: err,
+    });
   }
 }
 

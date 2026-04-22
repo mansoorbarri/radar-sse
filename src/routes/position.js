@@ -14,12 +14,18 @@ const {
   buildAircraftDisplayFields,
   buildAuthLogIdentity,
 } = require("../utils/display");
+const { createLogger } = require("../utils/logger");
 
 const router = express.Router();
+const log = createLogger("position");
 const DEFAULT_STATS_MAX_SPEED_KTS = 750;
 const HIGH_PERFORMANCE_STATS_MAX_SPEED_KTS = 1100;
 const STATS_EXCLUDED_SPEED_REASON = "speed_over_stats_limit";
 const EARTH_RADIUS_NM = 3440.065;
+const MIN_SPEED_SAMPLE_INTERVAL_MS = 1000;
+const MAX_REASONABLE_REPORTED_SPEED_KTS = 3000;
+const MAX_REASONABLE_OBSERVED_SPEED_KTS = 3000;
+const MAX_SHORT_INTERVAL_JUMP_NM = 1;
 
 function isHighPerformanceStatsAircraft(aircraftType) {
   const normalized = String(aircraftType || "").trim().toUpperCase();
@@ -73,6 +79,42 @@ function haversineDistanceNm(lat1, lon1, lat2, lon2) {
   return EARTH_RADIUS_NM * c;
 }
 
+function isValidCoordinate(lat, lon) {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lon >= -180 &&
+    lon <= 180
+  );
+}
+
+function getReportedSpeedKts(data) {
+  const groundSpeed = Number(data.groundSpeed);
+  const indicatedSpeed = Number(data.speed);
+  const speed = Number.isFinite(groundSpeed) ? groundSpeed : indicatedSpeed;
+
+  if (
+    !Number.isFinite(speed) ||
+    speed < 0 ||
+    speed > MAX_REASONABLE_REPORTED_SPEED_KTS
+  ) {
+    return undefined;
+  }
+
+  return speed;
+}
+
+function updateMaxSpeed(session, speedKts) {
+  if (!Number.isFinite(speedKts) || speedKts < 0) return;
+
+  session.maxSpeed = Math.max(session.maxSpeed || 0, speedKts);
+  if (speedKts > getStatsMaxSpeedKts(session.aircraftType)) {
+    session.statsExcludedReason = STATS_EXCLUDED_SPEED_REASON;
+  }
+}
+
 // Add coordinate to session with memory limit enforcement
 function addCoordToSession(session, lat, lon) {
   const last = session.coords[session.coords.length - 1];
@@ -87,9 +129,16 @@ function addCoordToSession(session, lat, lon) {
 
     // Downsample if exceeding memory limit
     if (session.coords.length > MAX_MEMORY_COORDS) {
+      const originalPoints = session.coords.length;
       const targetSize = Math.floor(MAX_MEMORY_COORDS * 0.75); // Downsample to 75% to avoid frequent resampling
       session.coords = downsampleRoute(session.coords, targetSize);
-      console.log(`[MEMORY] Downsampled ${session.flightNo} coords to ${session.coords.length}`);
+      log.info("Downsampled in-memory route coordinates", {
+        flightNo: session.flightNo,
+        originalPoints,
+        downsampledPoints: session.coords.length,
+        maxMemoryCoords: MAX_MEMORY_COORDS,
+        targetSize,
+      });
     }
   }
 }
@@ -97,7 +146,7 @@ function addCoordToSession(session, lat, lon) {
 function updateSessionPosition(session, data, receivedAt) {
   const lat = Number(data.lat);
   const lon = Number(data.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  if (!isValidCoordinate(lat, lon)) return;
 
   const previousCoord =
     Array.isArray(session.lastCoord) && session.lastCoord.length >= 2
@@ -105,29 +154,56 @@ function updateSessionPosition(session, data, receivedAt) {
       : session.coords[session.coords.length - 1];
   const previousAt =
     typeof session.lastCoordAt === "number" ? session.lastCoordAt : undefined;
+  const reportedSpeedKts = getReportedSpeedKts(data);
 
   if (
     previousCoord &&
-    Number.isFinite(previousCoord[0]) &&
-    Number.isFinite(previousCoord[1]) &&
+    isValidCoordinate(previousCoord[0], previousCoord[1]) &&
     previousAt !== undefined &&
     receivedAt > previousAt
   ) {
-    const elapsedHours = (receivedAt - previousAt) / 3600000;
+    const elapsedMs = receivedAt - previousAt;
     const distanceNm = haversineDistanceNm(
       previousCoord[0],
       previousCoord[1],
       lat,
       lon,
     );
+    const elapsedHours = elapsedMs / 3600000;
     const observedSpeedKts = distanceNm / elapsedHours;
+    const isShortIntervalJump =
+      elapsedMs < MIN_SPEED_SAMPLE_INTERVAL_MS &&
+      distanceNm > MAX_SHORT_INTERVAL_JUMP_NM;
+    const isImplausibleObservedSpeed =
+      elapsedMs >= MIN_SPEED_SAMPLE_INTERVAL_MS &&
+      observedSpeedKts > MAX_REASONABLE_OBSERVED_SPEED_KTS;
 
-    if (Number.isFinite(observedSpeedKts)) {
-      session.maxSpeed = Math.max(session.maxSpeed || 0, observedSpeedKts);
-      if (observedSpeedKts > getStatsMaxSpeedKts(session.aircraftType)) {
-        session.statsExcludedReason = STATS_EXCLUDED_SPEED_REASON;
+    if (isShortIntervalJump || isImplausibleObservedSpeed) {
+      session.rejectedPositionCount = (session.rejectedPositionCount || 0) + 1;
+      if (session.rejectedPositionCount === 1) {
+        log.warn("Rejected implausible flight recording position", {
+          flightNo: session.flightNo,
+          aircraftType: session.aircraftType,
+          elapsedMs,
+          distanceNm: Math.round(distanceNm * 10) / 10,
+          observedSpeedKts: Math.round(observedSpeedKts),
+          reportedSpeedKts,
+          rejectedPositionCount: session.rejectedPositionCount,
+        });
       }
+      return;
     }
+
+    if (reportedSpeedKts !== undefined) {
+      updateMaxSpeed(session, reportedSpeedKts);
+    } else if (
+      elapsedMs >= MIN_SPEED_SAMPLE_INTERVAL_MS &&
+      observedSpeedKts <= MAX_REASONABLE_OBSERVED_SPEED_KTS
+    ) {
+      updateMaxSpeed(session, observedSpeedKts);
+    }
+  } else if (reportedSpeedKts !== undefined) {
+    updateMaxSpeed(session, reportedSpeedKts);
   }
 
   addCoordToSession(session, lat, lon);
@@ -172,9 +248,15 @@ router.post("/", async (req, res) => {
               user,
               googleId: searchId,
             });
-            console.log(
-              `[AUTH] ${authIdentity} | Role: ${role}`
-            );
+            log.info("Resolved authenticated user for position update", {
+              aircraftId: data.id,
+              callsign: data.callsign,
+              flightNo: data.flightNo,
+              googleId: searchId,
+              convexUserId,
+              role,
+              identity: authIdentity,
+            });
           } else {
             // Explicitly default to FREE when user not found
             role = "FREE";
@@ -182,14 +264,24 @@ router.post("/", async (req, res) => {
               aircraft: data,
               googleId: searchId,
             });
-            console.log(
-              `[AUTH] No user found for ${authIdentity} - defaulting to FREE`
-            );
+            log.info("No user found for position update; defaulting to FREE role", {
+              aircraftId: data.id,
+              callsign: data.callsign,
+              flightNo: data.flightNo,
+              googleId: searchId,
+              identity: authIdentity,
+            });
           }
         } catch (e) {
           // On DB error, also default to FREE (don't cache errors)
           role = "FREE";
-          console.error("[DB ERROR] Defaulting to FREE role:", e);
+          log.error("Failed to resolve user for position update; defaulting to FREE role", {
+            aircraftId: data.id,
+            callsign: data.callsign,
+            flightNo: data.flightNo,
+            googleId: searchId,
+            error: e,
+          });
         }
       }
     }
@@ -204,7 +296,13 @@ router.post("/", async (req, res) => {
       // Check if this user has a disconnected session we can restore
       if (!flightSessions.has(data.id) && disconnectedSessions.has(convexUserId)) {
         const { session, originalId } = disconnectedSessions.get(convexUserId);
-        console.log(`[RECONNECT] Restoring flight session for ${session.flightNo} (was ${originalId}, now ${data.id})`);
+        log.info("Restoring disconnected flight session after reconnect", {
+          flightNo: session.flightNo,
+          convexUserId,
+          previousAircraftId: originalId,
+          currentAircraftId: data.id,
+          disconnectedSessions: disconnectedSessions.size,
+        });
 
         // Restore the session with the current aircraft ID
         flightSessions.set(data.id, session);
@@ -223,6 +321,7 @@ router.post("/", async (req, res) => {
         // New flight session
         const lat = Number(data.lat);
         const lon = Number(data.lon);
+        const initialSpeedKts = getReportedSpeedKts(data) || 0;
         flightSessions.set(data.id, {
           convexUserId: convexUserId,
           callsign: data.callsign || "Unknown",
@@ -232,11 +331,15 @@ router.post("/", async (req, res) => {
           arrival: data.arrival || "???",
           squawk: data.squawk || null,
           maxAltitude: data.altMSL || 0,
-          maxSpeed: 0,
+          maxSpeed: initialSpeedKts,
+          statsExcludedReason:
+            initialSpeedKts > getStatsMaxSpeedKts(data.type)
+              ? STATS_EXCLUDED_SPEED_REASON
+              : undefined,
           coords:
-            Number.isFinite(lat) && Number.isFinite(lon) ? [[lat, lon]] : [],
+            isValidCoordinate(lat, lon) ? [[lat, lon]] : [],
           lastCoord:
-            Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : null,
+            isValidCoordinate(lat, lon) ? [lat, lon] : null,
           lastCoordAt: receivedAt,
           startTime: new Date(),
         });
