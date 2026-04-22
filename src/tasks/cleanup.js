@@ -2,6 +2,9 @@ const { GRACE_PERIOD_MS } = require("../config");
 const { aircraftMap, flightSessions, disconnectedSessions, commandQueue } = require("../store");
 const { finalizeDisconnectedSession } = require("../services/session");
 const { broadcast, markAircraftRemoved } = require("../services/broadcast");
+const { createLogger } = require("../utils/logger");
+
+const log = createLogger("cleanup");
 
 // Check for aircraft that stopped sending updates (12 second timeout)
 // Moves flight sessions to grace period instead of finalizing immediately
@@ -14,9 +17,14 @@ function startTimeoutCheck() {
       if (now - (aircraft.ts || 0) > 30000) {
         const session = flightSessions.get(id);
         if (session) {
-          console.log(
-            `[DISCONNECT] ${id} (${session.flightNo}) disconnected, entering grace period`
-          );
+          log.info("Aircraft disconnected; moving flight session to grace period", {
+            aircraftId: id,
+            flightNo: session.flightNo,
+            convexUserId: session.convexUserId,
+            lastSeenAt: aircraft.ts || null,
+            ageMs: now - (aircraft.ts || 0),
+            gracePeriodMs: GRACE_PERIOD_MS,
+          });
           // Move to disconnected sessions instead of finalizing
           disconnectedSessions.set(session.convexUserId, {
             session,
@@ -25,7 +33,11 @@ function startTimeoutCheck() {
           });
           flightSessions.delete(id);
         } else {
-          console.log(`[TIMEOUT] ${id} timed out (no active session)`);
+          log.info("Aircraft timed out with no active flight session", {
+            aircraftId: id,
+            lastSeenAt: aircraft.ts || null,
+            ageMs: now - (aircraft.ts || 0),
+          });
         }
         markAircraftRemoved(id);
         aircraftMap.delete(id);

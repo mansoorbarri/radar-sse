@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const { createLogger } = require("./utils/logger");
 
 // Initialize DB connection (validates env vars)
 require("./db");
@@ -17,6 +18,7 @@ const { startAllTasks } = require("./tasks/cleanup");
 const { persistFlightSessions, persistOnlineAirports } = require("./store");
 
 const app = express();
+const log = createLogger("server");
 
 app.use(cors({
   origin: [
@@ -43,15 +45,23 @@ startAllTasks();
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[SSE Server] Running on http://localhost:${PORT}`);
+  log.info("SSE server started", {
+    port: PORT,
+    host: "0.0.0.0",
+    localUrl: `http://localhost:${PORT}`,
+  });
 });
 
 // Graceful shutdown - persist in-memory state before exit
 function gracefulShutdown(signal) {
-  console.log(`[SHUTDOWN] Received ${signal}, persisting state...`);
+  log.info("Shutdown signal received; persisting state", {
+    signal,
+  });
   persistFlightSessions();
   persistOnlineAirports();
-  console.log("[SHUTDOWN] State persisted, exiting.");
+  log.info("State persisted; exiting", {
+    signal,
+  });
   process.exit(0);
 }
 

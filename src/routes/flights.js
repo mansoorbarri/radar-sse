@@ -4,8 +4,10 @@ const { MAX_RETRIES } = require("../config");
 const { aircraftMap, flightSessions, disconnectedSessions, commandQueue } = require("../store");
 const { broadcast, markAircraftRemoved } = require("../services/broadcast");
 const { finalizeFlight, finalizeDisconnectedSession } = require("../services/session");
+const { createLogger } = require("../utils/logger");
 
 const router = express.Router();
+const log = createLogger("flights");
 
 function normalizeFlightIdentifier(value) {
   return typeof value === "string" ? value.trim().toUpperCase() : "";
@@ -184,7 +186,12 @@ router.get("/active-flight-path", async (req, res) => {
       routeData: match.session.coords,
     });
   } catch (error) {
-    console.error("[ACTIVE-FLIGHT-PATH] Failed to fetch active session:", error);
+    log.error("Failed to fetch active flight path", {
+      id,
+      callsign,
+      googleId,
+      error,
+    });
     return res.status(500).json({
       error: "Failed to fetch active flight path",
     });
@@ -205,7 +212,13 @@ router.post("/retry-flight", async (req, res) => {
     if (!session.failedAt) {
       return res.status(400).json({ error: "Session has not failed, cannot retry" });
     }
-    console.log(`[RETRY] Manual retry for flight ${session.flightNo} (id: ${id}), resetting retry counter`);
+    log.info("Manual retry requested for active failed flight", {
+      aircraftId: id,
+      flightNo: session.flightNo,
+      convexUserId: session.convexUserId,
+      previousRetryCount: session.retryCount || 0,
+      maxRetries: MAX_RETRIES,
+    });
     session.retryCount = 0; // Reset for 3 more auto-retry attempts
     const result = await finalizeFlight(id, true);
     return res.json(result);
@@ -217,7 +230,13 @@ router.post("/retry-flight", async (req, res) => {
     if (!data.failedAt) {
       return res.status(400).json({ error: "Session has not failed, cannot retry" });
     }
-    console.log(`[RETRY] Manual retry for flight ${data.session.flightNo} (convexUserId: ${convexUserId}), resetting retry counter`);
+    log.info("Manual retry requested for disconnected failed flight", {
+      convexUserId,
+      flightNo: data.session.flightNo,
+      originalAircraftId: data.originalId,
+      previousRetryCount: data.retryCount || 0,
+      maxRetries: MAX_RETRIES,
+    });
     data.retryCount = 0; // Reset for 3 more auto-retry attempts
     const result = await finalizeDisconnectedSession(convexUserId, true);
     return res.json(result);
@@ -229,8 +248,12 @@ router.post("/retry-flight", async (req, res) => {
 // End flight immediately (called when user clicks Clear in the UI)
 router.post("/end-flight", async (req, res) => {
   const { id, googleId } = req.body;
-  console.log(`[END-FLIGHT] Request received: id=${id}, googleId=${googleId}`);
-  console.log(`[END-FLIGHT] Active sessions: ${flightSessions.size}, Disconnected: ${disconnectedSessions.size}`);
+  log.info("End-flight request received", {
+    aircraftId: id,
+    googleId,
+    activeSessions: flightSessions.size,
+    disconnectedSessions: disconnectedSessions.size,
+  });
 
   if (!id && !googleId) {
     return res.status(400).json({ error: "Missing id or googleId" });
@@ -243,7 +266,12 @@ router.post("/end-flight", async (req, res) => {
   if (id && flightSessions.has(id)) {
     const session = flightSessions.get(id);
     sessionInfo = { flightNo: session.flightNo, convexUserId: session.convexUserId };
-    console.log(`[END-FLIGHT] Finalizing active session for ${session.flightNo} (id: ${id})`);
+    log.info("Finalizing active flight session", {
+      aircraftId: id,
+      flightNo: session.flightNo,
+      convexUserId: session.convexUserId,
+      matchBy: "aircraftId",
+    });
     await finalizeFlight(id);
     finalized = true;
   }
@@ -259,13 +287,24 @@ router.post("/end-flight", async (req, res) => {
           const user = await convex.query("users:getByGoogleId", { googleId: String(googleId) });
           if (user && user._id === session.convexUserId) {
             sessionInfo = { flightNo: session.flightNo, convexUserId: session.convexUserId };
-            console.log(`[END-FLIGHT] Finalizing active session for ${session.flightNo} (found by googleId)`);
+            log.info("Finalizing active flight session", {
+              aircraftId,
+              flightNo: session.flightNo,
+              convexUserId: session.convexUserId,
+              googleId,
+              matchBy: "googleId",
+            });
             await finalizeFlight(aircraftId);
             finalized = true;
             break;
           }
         } catch (e) {
-          console.error("[END-FLIGHT] Error looking up user:", e);
+          log.error("Failed to look up user while ending active flight", {
+            aircraftId,
+            googleId,
+            flightNo: session.flightNo,
+            error: e,
+          });
         }
       }
     }
@@ -276,7 +315,12 @@ router.post("/end-flight", async (req, res) => {
     for (const [convexUserId, data] of disconnectedSessions.entries()) {
       if (data.originalId === id) {
         sessionInfo = { flightNo: data.session.flightNo, convexUserId };
-        console.log(`[END-FLIGHT] Finalizing disconnected session for ${data.session.flightNo} (found by originalId)`);
+        log.info("Finalizing disconnected flight session", {
+          aircraftId: id,
+          flightNo: data.session.flightNo,
+          convexUserId,
+          matchBy: "originalAircraftId",
+        });
         await finalizeDisconnectedSession(convexUserId);
         finalized = true;
         break;
@@ -291,12 +335,21 @@ router.post("/end-flight", async (req, res) => {
       if (user && disconnectedSessions.has(user._id)) {
         const data = disconnectedSessions.get(user._id);
         sessionInfo = { flightNo: data.session.flightNo, convexUserId: user._id };
-        console.log(`[END-FLIGHT] Finalizing disconnected session for ${data.session.flightNo} (found by googleId)`);
+        log.info("Finalizing disconnected flight session", {
+          originalAircraftId: data.originalId,
+          flightNo: data.session.flightNo,
+          convexUserId: user._id,
+          googleId,
+          matchBy: "googleId",
+        });
         await finalizeDisconnectedSession(user._id);
         finalized = true;
       }
     } catch (e) {
-      console.error("[END-FLIGHT] Error looking up user for disconnected session:", e);
+      log.error("Failed to look up user while ending disconnected flight", {
+        googleId,
+        error: e,
+      });
     }
   }
 
@@ -309,10 +362,22 @@ router.post("/end-flight", async (req, res) => {
   }
 
   if (finalized) {
-    console.log(`[END-FLIGHT] Successfully ended flight for ${sessionInfo?.flightNo}`);
+    log.info("End-flight request completed", {
+      finalized: true,
+      flightNo: sessionInfo?.flightNo,
+      convexUserId: sessionInfo?.convexUserId,
+      aircraftId: id,
+      googleId,
+    });
     return res.json({ success: true, finalized: true, flightNo: sessionInfo?.flightNo });
   } else {
-    console.log(`[END-FLIGHT] No active session found for id=${id}, googleId=${googleId}`);
+    log.info("End-flight request completed with no matching session", {
+      finalized: false,
+      aircraftId: id,
+      googleId,
+      activeSessions: flightSessions.size,
+      disconnectedSessions: disconnectedSessions.size,
+    });
     return res.json({ success: true, finalized: false, reason: "No active session found" });
   }
 });

@@ -2,9 +2,11 @@ const express = require("express");
 const { onlineAirports, persistOnlineAirports } = require("../store");
 const { broadcast } = require("../services/broadcast");
 const { normalizeAirportController } = require("../utils/display");
+const { createLogger } = require("../utils/logger");
 
 const onlineRouter = express.Router();
 const offlineRouter = express.Router();
+const log = createLogger("airports");
 
 const ICAO_REGEX = /^[A-Z]{4}$/;
 const POSITIONS = ["control", "tower", "ground", "delivery"];
@@ -41,7 +43,13 @@ onlineRouter.post("/", (req, res) => {
       ],
     });
 
-    console.log(`[ATC] ${user} (${discordUserId || "unknown"}) marked ${icao} as online (control)`);
+    log.info("Airport marked online", {
+      icao,
+      user,
+      discordUserId: discordUserId || null,
+      position: "control",
+      controllers: 1,
+    });
     persistOnlineAirports();
     broadcast();
     return res.json({ success: true, icao, position: "control" });
@@ -102,7 +110,14 @@ onlineRouter.post("/", (req, res) => {
   // Sort controllers by hierarchy position (top to bottom)
   entry.controllers.sort((a, b) => POSITIONS.indexOf(a.position) - POSITIONS.indexOf(b.position));
 
-  console.log(`[ATC] ${user} (${discordUserId || "unknown"}) marked ${icao} as ${position}`);
+  log.info("Controller added to online airport", {
+    icao,
+    user,
+    discordUserId: discordUserId || null,
+    position,
+    controllers: entry.controllers.length,
+    takenPositions: [...takenPositions],
+  });
   persistOnlineAirports();
   broadcast();
   return res.json({ success: true, icao, position });
@@ -133,21 +148,40 @@ offlineRouter.post("/", (req, res) => {
   if (isAdmin && controllerIdx === -1) {
     // Admin removing all controllers
     onlineAirports.delete(icao);
-    console.log(`[ATC] ${icao} marked as fully offline by admin ${discordUserId || "unknown"}`);
+    log.info("Airport marked fully offline by admin", {
+      icao,
+      discordUserId: discordUserId || null,
+      removedControllers: entry.controllers.length,
+    });
   } else {
     // Remove just this controller
     const removed = entry.controllers.splice(controllerIdx, 1)[0];
-    console.log(`[ATC] ${removed.user} (${removed.position}) removed from ${icao} by ${discordUserId || "unknown"}${isAdmin ? " (admin)" : ""}`);
+    log.info("Controller removed from airport", {
+      icao,
+      removedUser: removed.user,
+      removedDiscordUserId: removed.discordUserId || null,
+      removedPosition: removed.position,
+      requestedByDiscordUserId: discordUserId || null,
+      isAdmin: Boolean(isAdmin),
+      remainingControllers: entry.controllers.length,
+    });
 
     if (entry.controllers.length === 0) {
       // No controllers left — remove the airport entirely
       onlineAirports.delete(icao);
-      console.log(`[ATC] ${icao} fully offline (no controllers remaining)`);
+      log.info("Airport marked offline because no controllers remain", {
+        icao,
+      });
     } else if (entry.controllers.length === 1) {
       // Only one controller left — they become "control" (covers all)
       entry.controllers[0].position = "control";
       entry.controllers[0] = normalizeAirportController(entry.controllers[0]);
-      console.log(`[ATC] ${entry.controllers[0].user} now covers all positions at ${icao}`);
+      log.info("Remaining controller promoted to control", {
+        icao,
+        user: entry.controllers[0].user,
+        discordUserId: entry.controllers[0].discordUserId || null,
+        position: entry.controllers[0].position,
+      });
     }
   }
 
