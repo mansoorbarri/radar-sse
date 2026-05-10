@@ -6,8 +6,8 @@ const { createLogger } = require("../utils/logger");
 
 const log = createLogger("cleanup");
 
-// Check for aircraft that stopped sending updates (12 second timeout)
-// Moves flight sessions to grace period instead of finalizing immediately
+// Check for aircraft that stopped sending updates.
+// Moves flight sessions into the disconnected pool instead of finalizing immediately.
 function startTimeoutCheck() {
   setInterval(() => {
     const now = Date.now();
@@ -17,19 +17,21 @@ function startTimeoutCheck() {
       if (now - (aircraft.ts || 0) > 30000) {
         const session = flightSessions.get(id);
         if (session) {
-          log.info("Aircraft disconnected; moving flight session to grace period", {
+          log.info("Aircraft disconnected; moving flight session to disconnected pool", {
             aircraftId: id,
             flightNo: session.flightNo,
             convexUserId: session.convexUserId,
             lastSeenAt: aircraft.ts || null,
             ageMs: now - (aircraft.ts || 0),
-            gracePeriodMs: GRACE_PERIOD_MS,
+            resumableWindowMs: GRACE_PERIOD_MS,
           });
-          // Move to disconnected sessions instead of finalizing
+          // Move to disconnected sessions instead of finalizing.
           disconnectedSessions.set(session.convexUserId, {
             session,
             originalId: id,
             disconnectedAt: now,
+            resumeApprovedForId: null,
+            resumeApprovedAt: null,
           });
           flightSessions.delete(id);
         } else {
@@ -53,7 +55,7 @@ function startTimeoutCheck() {
   }, 5000);
 }
 
-// Check for disconnected sessions that have exceeded the grace period
+// Check for disconnected sessions that have exceeded the resumable window.
 function startGracePeriodCheck() {
   setInterval(() => {
     const now = Date.now();

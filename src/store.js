@@ -19,7 +19,8 @@ const flightSessions = new Map();
 // Pending remote commands per aircraft: id -> [commands]
 const commandQueue = new Map();
 
-// Sessions in grace period awaiting reconnection: convexUserId -> { session, originalId, disconnectedAt }
+// Sessions awaiting possible manual resume:
+// convexUserId -> { session, originalId, disconnectedAt, resumeApprovedForId, resumeApprovedAt }
 const disconnectedSessions = new Map();
 
 // Airports with online ATC: icao -> { icao, user, discordInvite, activatedAt }
@@ -127,6 +128,8 @@ function restoreFlightSessions() {
             session,
             originalId: id,
             disconnectedAt: Date.now(),
+            resumeApprovedForId: null,
+            resumeApprovedAt: null,
           });
         }
       }
@@ -137,6 +140,8 @@ function restoreFlightSessions() {
         entry.session.startTime = new Date(entry.session.startTime);
         // Reset the disconnect timer so the full grace period applies from restart
         entry.disconnectedAt = Date.now();
+        entry.resumeApprovedForId = null;
+        entry.resumeApprovedAt = null;
         disconnectedSessions.set(userId, entry);
       }
     }
