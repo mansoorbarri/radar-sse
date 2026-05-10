@@ -1,5 +1,5 @@
-// Grace period before finalizing a flight after disconnect (3 minutes)
-const GRACE_PERIOD_MS = 180000;
+// How long to keep an unexpectedly disconnected flight resumable.
+const GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
 
 // Maximum coordinates to store (Convex array limit is 8192)
 const MAX_ROUTE_COORDS = 8000;

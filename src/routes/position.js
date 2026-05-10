@@ -211,6 +211,24 @@ function updateSessionPosition(session, data, receivedAt) {
   session.lastCoordAt = receivedAt;
 }
 
+function updateSessionMetadata(session, data) {
+  session.callsign = data.callsign || session.callsign || "Unknown";
+  session.flightNo = data.flightNo || session.flightNo || "Unknown";
+  session.aircraftType = data.type || session.aircraftType || "Unknown";
+  session.departure = data.departure || session.departure || "???";
+  session.arrival = data.arrival || session.arrival || "???";
+  session.af = data.af || session.af || "";
+  session.nextWaypoint = data.nextWaypoint || session.nextWaypoint || null;
+
+  if (data.squawk) {
+    session.squawk = data.squawk;
+  }
+
+  if (data.altMSL && data.altMSL > session.maxAltitude) {
+    session.maxAltitude = data.altMSL;
+  }
+}
+
 router.post("/", async (req, res) => {
   const data = req.body;
   if (data.id) {
@@ -293,29 +311,55 @@ router.post("/", async (req, res) => {
 
     // Log flights for ALL signed-in users (viewing history is restricted in frontend)
     if (convexUserId) {
-      // Check if this user has a disconnected session we can restore
+      // Restore a disconnected session only if the pilot explicitly approved it.
       if (!flightSessions.has(data.id) && disconnectedSessions.has(convexUserId)) {
-        const { session, originalId } = disconnectedSessions.get(convexUserId);
-        log.info("Restoring disconnected flight session after reconnect", {
-          flightNo: session.flightNo,
-          convexUserId,
-          previousAircraftId: originalId,
-          currentAircraftId: data.id,
-          disconnectedSessions: disconnectedSessions.size,
-        });
+        const disconnected = disconnectedSessions.get(convexUserId);
+        const { session, originalId, resumeApprovedForId } = disconnected;
 
-        // Restore the session with the current aircraft ID
-        flightSessions.set(data.id, session);
-        disconnectedSessions.delete(convexUserId);
+        if (
+          typeof resumeApprovedForId === "string" &&
+          resumeApprovedForId === data.id
+        ) {
+          log.info("Restoring disconnected flight session after explicit resume", {
+            flightNo: session.flightNo,
+            convexUserId,
+            previousAircraftId: originalId,
+            currentAircraftId: data.id,
+            disconnectedSessions: disconnectedSessions.size,
+          });
 
-        updateSessionPosition(session, data, receivedAt);
-        // Update squawk if provided
-        if (data.squawk) {
-          session.squawk = data.squawk;
-        }
-        // Track max altitude and speed
-        if (data.altMSL && data.altMSL > session.maxAltitude) {
-          session.maxAltitude = data.altMSL;
+          flightSessions.set(data.id, session);
+          disconnectedSessions.delete(convexUserId);
+
+          updateSessionPosition(session, data, receivedAt);
+          updateSessionMetadata(session, data);
+        } else {
+          const lat = Number(data.lat);
+          const lon = Number(data.lon);
+          const initialSpeedKts = getReportedSpeedKts(data) || 0;
+          flightSessions.set(data.id, {
+            convexUserId: convexUserId,
+            callsign: data.callsign || "Unknown",
+            flightNo: data.flightNo || "Unknown",
+            aircraftType: data.type || "Unknown",
+            departure: data.departure || "???",
+            arrival: data.arrival || "???",
+            squawk: data.squawk || null,
+            af: data.af || "",
+            nextWaypoint: data.nextWaypoint || null,
+            maxAltitude: data.altMSL || 0,
+            maxSpeed: initialSpeedKts,
+            statsExcludedReason:
+              initialSpeedKts > getStatsMaxSpeedKts(data.type)
+                ? STATS_EXCLUDED_SPEED_REASON
+                : undefined,
+            coords:
+              isValidCoordinate(lat, lon) ? [[lat, lon]] : [],
+            lastCoord:
+              isValidCoordinate(lat, lon) ? [lat, lon] : null,
+            lastCoordAt: receivedAt,
+            startTime: new Date(),
+          });
         }
       } else if (!flightSessions.has(data.id)) {
         // New flight session
@@ -330,6 +374,8 @@ router.post("/", async (req, res) => {
           departure: data.departure || "???",
           arrival: data.arrival || "???",
           squawk: data.squawk || null,
+          af: data.af || "",
+          nextWaypoint: data.nextWaypoint || null,
           maxAltitude: data.altMSL || 0,
           maxSpeed: initialSpeedKts,
           statsExcludedReason:
@@ -347,14 +393,7 @@ router.post("/", async (req, res) => {
         // Existing active session - add coordinates and update max values
         const session = flightSessions.get(data.id);
         updateSessionPosition(session, data, receivedAt);
-        // Update squawk if provided
-        if (data.squawk) {
-          session.squawk = data.squawk;
-        }
-        // Track max altitude and speed
-        if (data.altMSL && data.altMSL > session.maxAltitude) {
-          session.maxAltitude = data.altMSL;
-        }
+        updateSessionMetadata(session, data);
       }
     }
 

@@ -1,6 +1,6 @@
 const express = require("express");
 const { convex } = require("../db");
-const { MAX_RETRIES } = require("../config");
+const { GRACE_PERIOD_MS, MAX_RETRIES } = require("../config");
 const { aircraftMap, flightSessions, disconnectedSessions, commandQueue } = require("../store");
 const { broadcast, markAircraftRemoved } = require("../services/broadcast");
 const { finalizeFlight, finalizeDisconnectedSession } = require("../services/session");
@@ -11,6 +11,48 @@ const log = createLogger("flights");
 
 function normalizeFlightIdentifier(value) {
   return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
+async function findUserByGoogleId(googleId) {
+  if (!googleId) return null;
+
+  return await convex.query("users:getByGoogleId", {
+    googleId: String(googleId),
+  });
+}
+
+function buildResumePayload(convexUserId, data) {
+  const disconnectedAt = Number(data.disconnectedAt) || Date.now();
+
+  return {
+    available: true,
+    convexUserId,
+    aircraftId: data.originalId,
+    disconnectedAt,
+    resumableUntil: disconnectedAt + GRACE_PERIOD_MS,
+    session: {
+      callsign: data.session.flightNo || data.session.callsign || "Unknown",
+      flightNo: data.session.flightNo || "",
+      aircraftType: data.session.aircraftType || "Unknown",
+      departure: data.session.departure || "???",
+      arrival: data.session.arrival || "???",
+      squawk: data.session.squawk || "",
+      af: data.session.af || "",
+      nextWaypoint: data.session.nextWaypoint || null,
+      startTime:
+        data.session.startTime instanceof Date
+          ? data.session.startTime.getTime()
+          : new Date(data.session.startTime).getTime(),
+      routePoints: Array.isArray(data.session.coords)
+        ? data.session.coords.length
+        : 0,
+    },
+  };
+}
+
+function isResumeWindowExpired(data) {
+  const disconnectedAt = Number(data?.disconnectedAt) || 0;
+  return disconnectedAt > 0 && Date.now() - disconnectedAt > GRACE_PERIOD_MS;
 }
 
 async function findSessionByQuery({ id, callsign, googleId }) {
@@ -41,9 +83,7 @@ async function findSessionByQuery({ id, callsign, googleId }) {
 
   let convexUserId = null;
   if (googleId) {
-    const user = await convex.query("users:getByGoogleId", {
-      googleId: String(googleId),
-    });
+    const user = await findUserByGoogleId(googleId);
     convexUserId = user?._id ?? null;
 
     if (convexUserId) {
@@ -195,6 +235,115 @@ router.get("/active-flight-path", async (req, res) => {
     return res.status(500).json({
       error: "Failed to fetch active flight path",
     });
+  }
+});
+
+router.get("/resume-flight", async (req, res) => {
+  const googleId =
+    typeof req.query.googleId === "string"
+      ? req.query.googleId.trim()
+      : undefined;
+
+  if (!googleId) {
+    return res.status(400).json({ error: "Missing googleId" });
+  }
+
+  try {
+    const user = await findUserByGoogleId(googleId);
+    if (!user) {
+      return res.json({ available: false });
+    }
+
+    for (const session of flightSessions.values()) {
+      if (session.convexUserId === user._id) {
+        return res.json({ available: false, reason: "active_session_exists" });
+      }
+    }
+
+    const data = disconnectedSessions.get(user._id);
+    if (!data) {
+      return res.json({ available: false });
+    }
+
+    if (isResumeWindowExpired(data)) {
+      await finalizeDisconnectedSession(user._id);
+      return res.json({ available: false, reason: "resume_window_expired" });
+    }
+
+    return res.json(buildResumePayload(user._id, data));
+  } catch (error) {
+    log.error("Failed to fetch resumable flight", {
+      googleId,
+      error,
+    });
+    return res.status(500).json({ error: "Failed to fetch resumable flight" });
+  }
+});
+
+router.post("/resume-flight", async (req, res) => {
+  const { action, googleId, currentId } = req.body;
+
+  if (!action || !googleId) {
+    return res.status(400).json({ error: "Missing action or googleId" });
+  }
+
+  if (action !== "claim" && action !== "decline") {
+    return res.status(400).json({ error: "Invalid action" });
+  }
+
+  try {
+    const user = await findUserByGoogleId(googleId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const data = disconnectedSessions.get(user._id);
+    if (!data) {
+      return res.status(404).json({ error: "No resumable flight found" });
+    }
+
+    if (isResumeWindowExpired(data)) {
+      await finalizeDisconnectedSession(user._id);
+      return res.status(410).json({ error: "Resumable flight expired" });
+    }
+
+    if (action === "decline") {
+      const result = await finalizeDisconnectedSession(user._id);
+      return res.json({
+        success: true,
+        action,
+        finalized: result.success,
+      });
+    }
+
+    const resumeId =
+      typeof currentId === "string" && currentId.trim()
+        ? currentId.trim()
+        : String(googleId);
+
+    data.resumeApprovedForId = resumeId;
+    data.resumeApprovedAt = Date.now();
+
+    log.info("Marked disconnected flight as approved for resume", {
+      convexUserId: user._id,
+      flightNo: data.session.flightNo,
+      originalAircraftId: data.originalId,
+      approvedForId: resumeId,
+    });
+
+    return res.json({
+      success: true,
+      action,
+      ...buildResumePayload(user._id, data),
+    });
+  } catch (error) {
+    log.error("Failed to update resumable flight", {
+      action,
+      googleId,
+      currentId,
+      error,
+    });
+    return res.status(500).json({ error: "Failed to update resumable flight" });
   }
 });
 
