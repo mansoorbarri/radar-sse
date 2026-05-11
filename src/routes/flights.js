@@ -39,6 +39,7 @@ function buildResumePayload(convexUserId, data) {
       squawk: data.session.squawk || "",
       af: data.session.af || "",
       nextWaypoint: data.session.nextWaypoint || null,
+      takeoffTime: data.session.takeoffTime || "",
       startTime:
         data.session.startTime instanceof Date
           ? data.session.startTime.getTime()
