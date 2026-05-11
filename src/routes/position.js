@@ -26,6 +26,7 @@ const MIN_SPEED_SAMPLE_INTERVAL_MS = 1000;
 const MAX_REASONABLE_REPORTED_SPEED_KTS = 3000;
 const MAX_REASONABLE_OBSERVED_SPEED_KTS = 3000;
 const MAX_SHORT_INTERVAL_JUMP_NM = 1;
+const AUTO_RESUME_FALLBACK_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 function isHighPerformanceStatsAircraft(aircraftType) {
   const normalized = String(aircraftType || "").trim().toUpperCase();
@@ -113,6 +114,61 @@ function updateMaxSpeed(session, speedKts) {
   if (speedKts > getStatsMaxSpeedKts(session.aircraftType)) {
     session.statsExcludedReason = STATS_EXCLUDED_SPEED_REASON;
   }
+}
+
+function normalizeSessionField(value) {
+  return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
+function normalizeSessionTimestamp(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function shouldAutoResumeSession(disconnected, data, receivedAt) {
+  if (!disconnected?.session) return false;
+
+  const session = disconnected.session;
+  const sessionTakeoffTime = normalizeSessionTimestamp(session.takeoffTime);
+  const incomingTakeoffTime = normalizeSessionTimestamp(data.takeoffTime);
+  if (sessionTakeoffTime && incomingTakeoffTime) {
+    return sessionTakeoffTime === incomingTakeoffTime;
+  }
+
+  if (
+    typeof disconnected.disconnectedAt === "number" &&
+    receivedAt - disconnected.disconnectedAt > AUTO_RESUME_FALLBACK_WINDOW_MS
+  ) {
+    return false;
+  }
+
+  const sessionFlightNo = normalizeSessionField(
+    session.flightNo || session.callsign,
+  );
+  const incomingFlightNo = normalizeSessionField(data.flightNo || data.callsign);
+  if (!sessionFlightNo || !incomingFlightNo || sessionFlightNo !== incomingFlightNo) {
+    return false;
+  }
+
+  const sessionDeparture = normalizeSessionField(session.departure);
+  const incomingDeparture = normalizeSessionField(data.departure);
+  if (sessionDeparture && incomingDeparture && sessionDeparture !== incomingDeparture) {
+    return false;
+  }
+
+  const sessionArrival = normalizeSessionField(session.arrival);
+  const incomingArrival = normalizeSessionField(data.arrival);
+  if (sessionArrival && incomingArrival && sessionArrival !== incomingArrival) {
+    return false;
+  }
+
+  return Boolean(
+    sessionTakeoffTime ||
+      incomingTakeoffTime ||
+      sessionDeparture ||
+      incomingDeparture ||
+      sessionArrival ||
+      incomingArrival,
+  );
 }
 
 // Add coordinate to session with memory limit enforcement
@@ -219,6 +275,7 @@ function updateSessionMetadata(session, data) {
   session.arrival = data.arrival || session.arrival || "???";
   session.af = data.af || session.af || "";
   session.nextWaypoint = data.nextWaypoint || session.nextWaypoint || null;
+  session.takeoffTime = data.takeoffTime || session.takeoffTime || "";
 
   if (data.squawk) {
     session.squawk = data.squawk;
@@ -311,21 +368,33 @@ router.post("/", async (req, res) => {
 
     // Log flights for ALL signed-in users (viewing history is restricted in frontend)
     if (convexUserId) {
-      // Restore a disconnected session only if the pilot explicitly approved it.
+      // Restore a disconnected session when the pilot explicitly claims it or
+      // when the continued leg is clearly the same flight.
       if (!flightSessions.has(data.id) && disconnectedSessions.has(convexUserId)) {
         const disconnected = disconnectedSessions.get(convexUserId);
         const { session, originalId, resumeApprovedForId } = disconnected;
+        const autoResume = shouldAutoResumeSession(
+          disconnected,
+          data,
+          receivedAt,
+        );
 
         if (
-          typeof resumeApprovedForId === "string" &&
-          resumeApprovedForId === data.id
+          (typeof resumeApprovedForId === "string" &&
+            resumeApprovedForId === data.id) ||
+          autoResume
         ) {
-          log.info("Restoring disconnected flight session after explicit resume", {
+          log.info("Restoring disconnected flight session", {
             flightNo: session.flightNo,
             convexUserId,
             previousAircraftId: originalId,
             currentAircraftId: data.id,
             disconnectedSessions: disconnectedSessions.size,
+            restoredBy:
+              typeof resumeApprovedForId === "string" &&
+              resumeApprovedForId === data.id
+                ? "explicit_resume"
+                : "same_flight_auto_resume",
           });
 
           flightSessions.set(data.id, session);
@@ -347,6 +416,7 @@ router.post("/", async (req, res) => {
             squawk: data.squawk || null,
             af: data.af || "",
             nextWaypoint: data.nextWaypoint || null,
+            takeoffTime: data.takeoffTime || "",
             maxAltitude: data.altMSL || 0,
             maxSpeed: initialSpeedKts,
             statsExcludedReason:
@@ -376,6 +446,7 @@ router.post("/", async (req, res) => {
           squawk: data.squawk || null,
           af: data.af || "",
           nextWaypoint: data.nextWaypoint || null,
+          takeoffTime: data.takeoffTime || "",
           maxAltitude: data.altMSL || 0,
           maxSpeed: initialSpeedKts,
           statsExcludedReason:
