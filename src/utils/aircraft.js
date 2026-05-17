@@ -14,6 +14,9 @@ function normalizeAircraftType(type) {
   if (!type) return null;
   const upper = type.toUpperCase();
 
+  const poseidonMatch = upper.match(/\bP-?8(?:I)?\b/);
+  if (poseidonMatch) return "P8";
+
   // Boeing: "BOEING 777-300ER" -> "B777"
   const boeingMatch = upper.match(/BOEING\s+(\d{3})/);
   if (boeingMatch) return `B${boeingMatch[1]}`;
@@ -25,6 +28,10 @@ function normalizeAircraftType(type) {
   // Already in short format (e.g., "B737", "A320")
   const shortMatch = upper.match(/^[AB]\d{3}$/);
   if (shortMatch) return upper;
+
+  // Antonov: "Antonov An-225 Mriya" -> "AN225"
+  const antonovMatch = upper.match(/\bAN-?(\d{2,3})\b/);
+  if (antonovMatch) return `AN${antonovMatch[1]}`;
 
   // GA: Piper "PA-28", "PA-44" -> "PA28", "PA44"
   const piperMatch = upper.match(/PA-?(\d{2,3})/);
