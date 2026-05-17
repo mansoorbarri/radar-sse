@@ -16,6 +16,8 @@ function normalizeAircraftType(type) {
 
   const poseidonMatch = upper.match(/\bP-?8(?:I)?\b/);
   if (poseidonMatch) return "P8";
+  const ilyushinMatch = upper.match(/\bIL-?76(?:[A-Z0-9-]*)/);
+  if (ilyushinMatch) return "IL76";
 
   // Boeing: "BOEING 777-300ER" -> "B777"
   const boeingMatch = upper.match(/BOEING\s+(\d{3})/);
