@@ -11,6 +11,13 @@ const {
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { downsampleRoute } = require("../utils/route");
 const {
+  normalizeSessionField,
+  normalizeSessionTimestamp,
+  getSessionFlightIdentifier,
+  getSessionDeparture,
+  getSessionArrival,
+} = require("../utils/session-match");
+const {
   buildAircraftDisplayFields,
   buildAuthLogIdentity,
 } = require("../utils/display");
@@ -116,14 +123,6 @@ function updateMaxSpeed(session, speedKts) {
   }
 }
 
-function normalizeSessionField(value) {
-  return typeof value === "string" ? value.trim().toUpperCase() : "";
-}
-
-function normalizeSessionTimestamp(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
 function shouldAutoResumeSession(disconnected, data, receivedAt) {
   if (!disconnected?.session) return false;
 
@@ -149,14 +148,14 @@ function shouldAutoResumeSession(disconnected, data, receivedAt) {
     return false;
   }
 
-  const sessionDeparture = normalizeSessionField(session.departure);
-  const incomingDeparture = normalizeSessionField(data.departure);
+  const sessionDeparture = getSessionDeparture(session);
+  const incomingDeparture = getSessionDeparture(data);
   if (sessionDeparture && incomingDeparture && sessionDeparture !== incomingDeparture) {
     return false;
   }
 
-  const sessionArrival = normalizeSessionField(session.arrival);
-  const incomingArrival = normalizeSessionField(data.arrival);
+  const sessionArrival = getSessionArrival(session);
+  const incomingArrival = getSessionArrival(data);
   if (sessionArrival && incomingArrival && sessionArrival !== incomingArrival) {
     return false;
   }
@@ -403,6 +402,18 @@ router.post("/", async (req, res) => {
           updateSessionPosition(session, data, receivedAt);
           updateSessionMetadata(session, data);
         } else {
+          log.warn("Starting a new active flight session while a disconnected session exists", {
+            aircraftId: data.id,
+            currentFlightNo: getSessionFlightIdentifier(data),
+            disconnectedFlightNo: getSessionFlightIdentifier(session),
+            currentDeparture: getSessionDeparture(data),
+            disconnectedDeparture: getSessionDeparture(session),
+            currentArrival: getSessionArrival(data),
+            disconnectedArrival: getSessionArrival(session),
+            currentTakeoffTime: normalizeSessionTimestamp(data.takeoffTime),
+            disconnectedTakeoffTime: normalizeSessionTimestamp(session.takeoffTime),
+            convexUserId,
+          });
           const lat = Number(data.lat);
           const lon = Number(data.lon);
           const initialSpeedKts = getReportedSpeedKts(data) || 0;

@@ -1,6 +1,10 @@
 const fs = require("fs");
 const path = require("path");
 const { normalizeAirportEntry } = require("./utils/display");
+const {
+  doSessionsLikelyMatch,
+  normalizeSessionField,
+} = require("./utils/session-match");
 const { createLogger } = require("./utils/logger");
 
 const log = createLogger("store");
@@ -164,6 +168,169 @@ function restoreFlightSessions() {
   }
 }
 
+function areCoordsNear(coordA, coordB, epsilon = 0.0002) {
+  return (
+    Array.isArray(coordA) &&
+    Array.isArray(coordB) &&
+    coordA.length >= 2 &&
+    coordB.length >= 2 &&
+    Math.abs(coordA[0] - coordB[0]) <= epsilon &&
+    Math.abs(coordA[1] - coordB[1]) <= epsilon
+  );
+}
+
+function appendMergedCoords(baseCoords, extraCoords) {
+  const merged = Array.isArray(baseCoords) ? [...baseCoords] : [];
+  if (!Array.isArray(extraCoords) || extraCoords.length === 0) {
+    return merged;
+  }
+
+  for (const coord of extraCoords) {
+    const last = merged[merged.length - 1];
+    if (!areCoordsNear(last, coord)) {
+      merged.push(coord);
+    }
+  }
+
+  return merged;
+}
+
+function pickEarlierDate(dateA, dateB) {
+  if (!(dateA instanceof Date) || Number.isNaN(dateA.getTime())) return dateB;
+  if (!(dateB instanceof Date) || Number.isNaN(dateB.getTime())) return dateA;
+  return dateA.getTime() <= dateB.getTime() ? dateA : dateB;
+}
+
+function pickPreferredSessionValue(primary, fallback, defaultValue = "") {
+  if (normalizeSessionField(primary)) return primary;
+  if (normalizeSessionField(fallback)) return fallback;
+  return defaultValue;
+}
+
+function mergeDisconnectedSessionData(existingData, incomingData) {
+  const existingSession = existingData.session;
+  const incomingSession = incomingData.session;
+
+  existingSession.coords = appendMergedCoords(
+    existingSession.coords,
+    incomingSession.coords,
+  );
+  existingSession.startTime = pickEarlierDate(
+    existingSession.startTime,
+    incomingSession.startTime,
+  );
+  const latestEndTime = Math.max(
+    Number(existingSession.endTime) || 0,
+    Number(incomingSession.endTime) || 0,
+  );
+  existingSession.endTime = latestEndTime > 0 ? latestEndTime : undefined;
+  existingSession.maxAltitude = Math.max(
+    Number(existingSession.maxAltitude) || 0,
+    Number(incomingSession.maxAltitude) || 0,
+  );
+  existingSession.maxSpeed = Math.max(
+    Number(existingSession.maxSpeed) || 0,
+    Number(incomingSession.maxSpeed) || 0,
+  );
+  existingSession.statsExcludedReason =
+    existingSession.statsExcludedReason || incomingSession.statsExcludedReason;
+  existingSession.squawk = incomingSession.squawk || existingSession.squawk;
+  existingSession.af = incomingSession.af || existingSession.af;
+  existingSession.nextWaypoint =
+    incomingSession.nextWaypoint || existingSession.nextWaypoint;
+  existingSession.takeoffTime =
+    existingSession.takeoffTime || incomingSession.takeoffTime || "";
+  existingSession.departure = pickPreferredSessionValue(
+    existingSession.departure,
+    incomingSession.departure,
+    "???",
+  );
+  existingSession.arrival = pickPreferredSessionValue(
+    existingSession.arrival,
+    incomingSession.arrival,
+    "???",
+  );
+  existingSession.callsign = pickPreferredSessionValue(
+    existingSession.callsign,
+    incomingSession.callsign,
+    "Unknown",
+  );
+  existingSession.flightNo = pickPreferredSessionValue(
+    existingSession.flightNo,
+    incomingSession.flightNo,
+    "Unknown",
+  );
+  existingSession.aircraftType = pickPreferredSessionValue(
+    existingSession.aircraftType,
+    incomingSession.aircraftType,
+    "Unknown",
+  );
+  existingSession.lastCoord = incomingSession.lastCoord || existingSession.lastCoord;
+  existingSession.lastCoordAt = Math.max(
+    Number(existingSession.lastCoordAt) || 0,
+    Number(incomingSession.lastCoordAt) || 0,
+  );
+}
+
+function parkDisconnectedSession(session, originalId, disconnectedAt = Date.now()) {
+  if (!session?.convexUserId) return;
+
+  const userId = session.convexUserId;
+  const incomingData = {
+    session,
+    originalId,
+    disconnectedAt,
+    resumeApprovedForId: null,
+    resumeApprovedAt: null,
+  };
+  const existingData = disconnectedSessions.get(userId);
+
+  if (!existingData) {
+    disconnectedSessions.set(userId, incomingData);
+    return;
+  }
+
+  if (doSessionsLikelyMatch(existingData.session, session)) {
+    mergeDisconnectedSessionData(existingData, incomingData);
+    existingData.originalId = existingData.originalId || originalId;
+    existingData.disconnectedAt = disconnectedAt;
+    existingData.resumeApprovedForId = null;
+    existingData.resumeApprovedAt = null;
+    log.warn("Merged duplicate disconnected flight session for user", {
+      convexUserId: userId,
+      originalAircraftId: existingData.originalId,
+      mergedAircraftId: originalId,
+      mergedRoutePoints: existingData.session.coords.length,
+    });
+    return;
+  }
+
+  const existingPoints = Array.isArray(existingData.session.coords)
+    ? existingData.session.coords.length
+    : 0;
+  const incomingPoints = Array.isArray(session.coords) ? session.coords.length : 0;
+
+  if (existingPoints >= incomingPoints) {
+    log.warn("Preserved existing disconnected flight session instead of overwriting with shorter session", {
+      convexUserId: userId,
+      preservedAircraftId: existingData.originalId,
+      preservedRoutePoints: existingPoints,
+      skippedAircraftId: originalId,
+      skippedRoutePoints: incomingPoints,
+    });
+    return;
+  }
+
+  disconnectedSessions.set(userId, incomingData);
+  log.warn("Replaced disconnected flight session with longer unmatched session", {
+    convexUserId: userId,
+    replacedAircraftId: existingData.originalId,
+    replacedRoutePoints: existingPoints,
+    replacementAircraftId: originalId,
+    replacementRoutePoints: incomingPoints,
+  });
+}
+
 // Restore on module load
 restoreOnlineAirports();
 restoreFlightSessions();
@@ -282,4 +449,5 @@ module.exports = {
   // Persistence
   persistOnlineAirports,
   persistFlightSessions,
+  parkDisconnectedSession,
 };
