@@ -1,5 +1,11 @@
 const { GRACE_PERIOD_MS } = require("../config");
-const { aircraftMap, flightSessions, disconnectedSessions, commandQueue } = require("../store");
+const {
+  aircraftMap,
+  flightSessions,
+  disconnectedSessions,
+  commandQueue,
+  parkDisconnectedSession,
+} = require("../store");
 const { finalizeDisconnectedSession } = require("../services/session");
 const { broadcast, markAircraftRemoved } = require("../services/broadcast");
 const { createLogger } = require("../utils/logger");
@@ -26,13 +32,7 @@ function startTimeoutCheck() {
             resumableWindowMs: GRACE_PERIOD_MS,
           });
           // Move to disconnected sessions instead of finalizing.
-          disconnectedSessions.set(session.convexUserId, {
-            session,
-            originalId: id,
-            disconnectedAt: now,
-            resumeApprovedForId: null,
-            resumeApprovedAt: null,
-          });
+          parkDisconnectedSession(session, id, now);
           flightSessions.delete(id);
         } else {
           log.info("Aircraft timed out with no active flight session", {
