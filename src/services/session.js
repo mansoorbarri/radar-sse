@@ -6,6 +6,12 @@ const { createLogger } = require("../utils/logger");
 
 const log = createLogger("session");
 
+function getSystemSecretArgs() {
+  return process.env.BOT_API_SECRET
+    ? { systemSecret: process.env.BOT_API_SECRET }
+    : {};
+}
+
 function getSessionEndTime(session, fallbackTime = Date.now()) {
   const endTime = Math.max(
     Number(session?.endTime) || 0,
@@ -61,6 +67,7 @@ async function finalizeFlight(id, isRetry = false) {
         routeData: routeData,
         startTime: session.startTime.getTime(),
         endTime: endTime,
+        ...getSystemSecretArgs(),
       });
       log.info(isRetry ? "Saved active flight after retry" : "Saved active flight", {
         aircraftId: id,
@@ -166,6 +173,7 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
         routeData: routeData,
         startTime: session.startTime.getTime(),
         endTime: endTime,
+        ...getSystemSecretArgs(),
       });
       log.info(isRetry ? "Saved disconnected flight after retry" : "Saved disconnected flight", {
         convexUserId,
