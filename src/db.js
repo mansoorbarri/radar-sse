@@ -11,6 +11,13 @@ if (!convexUrl) {
   process.exit(1);
 }
 
+if (!process.env.BOT_API_SECRET) {
+  log.error("Missing system auth environment variable", {
+    requiredEnv: ["BOT_API_SECRET"],
+  });
+  process.exit(1);
+}
+
 const convex = new ConvexHttpClient(convexUrl);
 
 module.exports = { convex };
