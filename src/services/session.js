@@ -7,8 +7,8 @@ const { createLogger } = require("../utils/logger");
 const log = createLogger("session");
 
 function getSystemSecretArgs() {
-  return process.env.BOT_API_SECRET
-    ? { systemSecret: process.env.BOT_API_SECRET }
+  return process.env.CONVEX_SYSTEM_SECRET
+    ? { systemSecret: process.env.CONVEX_SYSTEM_SECRET }
     : {};
 }
 

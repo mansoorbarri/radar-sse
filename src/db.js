@@ -11,9 +11,9 @@ if (!convexUrl) {
   process.exit(1);
 }
 
-if (!process.env.BOT_API_SECRET) {
+if (!process.env.CONVEX_SYSTEM_SECRET) {
   log.error("Missing system auth environment variable", {
-    requiredEnv: ["BOT_API_SECRET"],
+    requiredEnv: ["CONVEX_SYSTEM_SECRET"],
   });
   process.exit(1);
 }
