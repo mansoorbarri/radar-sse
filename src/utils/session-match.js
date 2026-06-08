@@ -64,13 +64,9 @@ function doSessionsLikelyMatch(sessionA, sessionB) {
   }
 
   return Boolean(
-    takeoffA ||
-      takeoffB ||
-      departureA ||
-      departureB ||
-      arrivalA ||
-      arrivalB ||
-      flightA,
+    (departureA && departureB) ||
+      (arrivalA && arrivalB) ||
+      (departureA && departureB && arrivalA && arrivalB),
   );
 }
 

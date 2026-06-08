@@ -6,6 +6,23 @@ const { createLogger } = require("../utils/logger");
 
 const log = createLogger("session");
 
+function getSessionEndTime(session, fallbackTime = Date.now()) {
+  const endTime = Math.max(
+    Number(session?.endTime) || 0,
+    Number(session?.lastCoordAt) || 0,
+  );
+  return endTime > 0 ? endTime : fallbackTime;
+}
+
+function getSessionDurationMs(session, endTime) {
+  const startTime =
+    session?.startTime instanceof Date
+      ? session.startTime.getTime()
+      : new Date(session?.startTime).getTime();
+  const pausedDurationMs = Math.max(0, Number(session?.pausedDurationMs) || 0);
+  return Math.max(0, endTime - startTime - pausedDurationMs);
+}
+
 async function finalizeFlight(id, isRetry = false) {
   const session = flightSessions.get(id);
   if (!session) return { success: false, reason: "no_session" };
@@ -17,7 +34,8 @@ async function finalizeFlight(id, isRetry = false) {
 
   try {
     if (session.coords.length > 2) {
-      const endTime = session.endTime || Date.now();
+      const endTime = getSessionEndTime(session);
+      const duration = getSessionDurationMs(session, endTime);
       if (!session.endTime) session.endTime = endTime; // Preserve original end time for retries
       const routeData = downsampleRoute(session.coords, MAX_ROUTE_COORDS);
       if (session.coords.length > MAX_ROUTE_COORDS) {
@@ -36,7 +54,7 @@ async function finalizeFlight(id, isRetry = false) {
         depICAO: session.departure,
         arrICAO: session.arrival,
         squawk: session.squawk || undefined,
-        duration: endTime - session.startTime.getTime(),
+        duration,
         maxAltitude: session.maxAltitude || undefined,
         maxSpeed: session.maxSpeed || undefined,
         statsExcludedReason: session.statsExcludedReason || undefined,
@@ -116,7 +134,12 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
 
   try {
     if (session.coords.length > 2) {
-      const endTime = data.endTime || Date.now();
+      const endTime = Math.max(
+        Number(data.endTime) || 0,
+        Number(data.disconnectedAt) || 0,
+        getSessionEndTime(session, Date.now()),
+      );
+      const duration = getSessionDurationMs(session, endTime);
       if (!data.endTime) data.endTime = endTime; // Preserve original end time for retries
       const routeData = downsampleRoute(session.coords, MAX_ROUTE_COORDS);
       if (session.coords.length > MAX_ROUTE_COORDS) {
@@ -136,7 +159,7 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
         depICAO: session.departure,
         arrICAO: session.arrival,
         squawk: session.squawk || undefined,
-        duration: endTime - session.startTime.getTime(),
+        duration,
         maxAltitude: session.maxAltitude || undefined,
         maxSpeed: session.maxSpeed || undefined,
         statsExcludedReason: session.statsExcludedReason || undefined,

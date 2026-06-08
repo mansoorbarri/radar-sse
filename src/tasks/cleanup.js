@@ -32,7 +32,7 @@ function startTimeoutCheck() {
             resumableWindowMs: GRACE_PERIOD_MS,
           });
           // Move to disconnected sessions instead of finalizing.
-          parkDisconnectedSession(session, id, now);
+          parkDisconnectedSession(session, id, aircraft.ts || now);
           flightSessions.delete(id);
         } else {
           log.info("Aircraft timed out with no active flight session", {

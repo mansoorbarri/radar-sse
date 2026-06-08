@@ -33,7 +33,7 @@ const MIN_SPEED_SAMPLE_INTERVAL_MS = 1000;
 const MAX_REASONABLE_REPORTED_SPEED_KTS = 3000;
 const MAX_REASONABLE_OBSERVED_SPEED_KTS = 3000;
 const MAX_SHORT_INTERVAL_JUMP_NM = 1;
-const AUTO_RESUME_FALLBACK_WINDOW_MS = 6 * 60 * 60 * 1000;
+const AUTO_RESUME_FALLBACK_WINDOW_MS = 15 * 60 * 1000;
 
 function isHighPerformanceStatsAircraft(aircraftType) {
   const normalized = String(aircraftType || "").trim().toUpperCase();
@@ -160,14 +160,17 @@ function shouldAutoResumeSession(disconnected, data, receivedAt) {
     return false;
   }
 
-  return Boolean(
-    sessionTakeoffTime ||
-      incomingTakeoffTime ||
-      sessionDeparture ||
-      incomingDeparture ||
-      sessionArrival ||
-      incomingArrival,
-  );
+  const hasMatchingRouteMetadata =
+    Boolean(sessionDeparture && incomingDeparture) ||
+    Boolean(sessionArrival && incomingArrival) ||
+    Boolean(
+      sessionDeparture &&
+        incomingDeparture &&
+        sessionArrival &&
+        incomingArrival,
+    );
+
+  return hasMatchingRouteMetadata;
 }
 
 // Add coordinate to session with memory limit enforcement
@@ -264,6 +267,7 @@ function updateSessionPosition(session, data, receivedAt) {
   addCoordToSession(session, lat, lon);
   session.lastCoord = [lat, lon];
   session.lastCoordAt = receivedAt;
+  session.endTime = receivedAt;
 }
 
 function updateSessionMetadata(session, data) {
@@ -396,6 +400,12 @@ router.post("/", async (req, res) => {
                 : "same_flight_auto_resume",
           });
 
+          const pausedGapMs = Math.max(
+            0,
+            receivedAt - (Number(disconnected.disconnectedAt) || receivedAt),
+          );
+          session.pausedDurationMs =
+            (Number(session.pausedDurationMs) || 0) + pausedGapMs;
           flightSessions.set(data.id, session);
           disconnectedSessions.delete(convexUserId);
 
@@ -439,6 +449,8 @@ router.post("/", async (req, res) => {
             lastCoord:
               isValidCoordinate(lat, lon) ? [lat, lon] : null,
             lastCoordAt: receivedAt,
+            endTime: receivedAt,
+            pausedDurationMs: 0,
             startTime: new Date(),
           });
         }
@@ -469,6 +481,8 @@ router.post("/", async (req, res) => {
           lastCoord:
             isValidCoordinate(lat, lon) ? [lat, lon] : null,
           lastCoordAt: receivedAt,
+          endTime: receivedAt,
+          pausedDurationMs: 0,
           startTime: new Date(),
         });
       } else {
