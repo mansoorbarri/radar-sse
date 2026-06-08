@@ -128,10 +128,12 @@ function restoreFlightSessions() {
         // Move all previously active sessions into disconnectedSessions
         // so they can be reclaimed when the client reconnects with a new ID
         if (session.convexUserId) {
+          const disconnectedAt = getSessionDisconnectedAt(session);
+          session.endTime = disconnectedAt;
           disconnectedSessions.set(session.convexUserId, {
             session,
             originalId: id,
-            disconnectedAt: Date.now(),
+            disconnectedAt,
             resumeApprovedForId: null,
             resumeApprovedAt: null,
           });
@@ -142,8 +144,14 @@ function restoreFlightSessions() {
     if (data.disconnected) {
       for (const [userId, entry] of Object.entries(data.disconnected)) {
         entry.session.startTime = new Date(entry.session.startTime);
-        // Reset the disconnect timer so the full grace period applies from restart
-        entry.disconnectedAt = Date.now();
+        const restoredDisconnectedAt =
+          Number(entry.disconnectedAt) ||
+          getSessionDisconnectedAt(entry.session);
+        entry.session.endTime = getSessionDisconnectedAt(
+          entry.session,
+          restoredDisconnectedAt,
+        );
+        entry.disconnectedAt = restoredDisconnectedAt;
         entry.resumeApprovedForId = null;
         entry.resumeApprovedAt = null;
         disconnectedSessions.set(userId, entry);
@@ -207,6 +215,15 @@ function pickPreferredSessionValue(primary, fallback, defaultValue = "") {
   return defaultValue;
 }
 
+function getSessionDisconnectedAt(session, fallback = Date.now()) {
+  const disconnectedAt = Math.max(
+    Number(session?.lastCoordAt) || 0,
+    Number(session?.endTime) || 0,
+  );
+
+  return disconnectedAt > 0 ? disconnectedAt : fallback;
+}
+
 function mergeDisconnectedSessionData(existingData, incomingData) {
   const existingSession = existingData.session;
   const incomingSession = incomingData.session;
@@ -224,6 +241,10 @@ function mergeDisconnectedSessionData(existingData, incomingData) {
     Number(incomingSession.endTime) || 0,
   );
   existingSession.endTime = latestEndTime > 0 ? latestEndTime : undefined;
+  existingSession.pausedDurationMs = Math.max(
+    Number(existingSession.pausedDurationMs) || 0,
+    Number(incomingSession.pausedDurationMs) || 0,
+  );
   existingSession.maxAltitude = Math.max(
     Number(existingSession.maxAltitude) || 0,
     Number(incomingSession.maxAltitude) || 0,
@@ -276,10 +297,15 @@ function parkDisconnectedSession(session, originalId, disconnectedAt = Date.now(
   if (!session?.convexUserId) return;
 
   const userId = session.convexUserId;
+  const actualDisconnectedAt = getSessionDisconnectedAt(
+    session,
+    Number(disconnectedAt) || Date.now(),
+  );
+  session.endTime = actualDisconnectedAt;
   const incomingData = {
     session,
     originalId,
-    disconnectedAt,
+    disconnectedAt: actualDisconnectedAt,
     resumeApprovedForId: null,
     resumeApprovedAt: null,
   };
@@ -293,7 +319,7 @@ function parkDisconnectedSession(session, originalId, disconnectedAt = Date.now(
   if (doSessionsLikelyMatch(existingData.session, session)) {
     mergeDisconnectedSessionData(existingData, incomingData);
     existingData.originalId = existingData.originalId || originalId;
-    existingData.disconnectedAt = disconnectedAt;
+    existingData.disconnectedAt = actualDisconnectedAt || disconnectedAt;
     existingData.resumeApprovedForId = null;
     existingData.resumeApprovedAt = null;
     log.warn("Merged duplicate disconnected flight session for user", {
