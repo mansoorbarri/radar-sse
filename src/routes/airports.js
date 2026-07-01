@@ -1,6 +1,6 @@
 const express = require("express");
 const { onlineAirports, persistOnlineAirports } = require("../store");
-const { broadcast } = require("../services/broadcast");
+const { broadcast, markOnlineAirportsChanged } = require("../services/broadcast");
 const { normalizeAirportController } = require("../utils/display");
 const { createLogger } = require("../utils/logger");
 
@@ -51,6 +51,7 @@ onlineRouter.post("/", (req, res) => {
       controllers: 1,
     });
     persistOnlineAirports();
+    markOnlineAirportsChanged();
     broadcast();
     return res.json({ success: true, icao, position: "control" });
   }
@@ -119,6 +120,7 @@ onlineRouter.post("/", (req, res) => {
     takenPositions: [...takenPositions],
   });
   persistOnlineAirports();
+  markOnlineAirportsChanged();
   broadcast();
   return res.json({ success: true, icao, position });
 });
@@ -186,6 +188,7 @@ offlineRouter.post("/", (req, res) => {
   }
 
   persistOnlineAirports();
+  markOnlineAirportsChanged();
   broadcast();
   res.json({ success: true, icao });
 });
