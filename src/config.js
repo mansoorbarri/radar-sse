@@ -11,10 +11,14 @@ const MAX_MEMORY_COORDS = 2000;
 const MAX_RETRIES = 3;
 const RETRY_INTERVAL_MS = 30000; // 30 seconds
 
+// Maximum SSE broadcast frequency. Higher values reduce network egress.
+const BROADCAST_INTERVAL_MS = Number(process.env.BROADCAST_INTERVAL_MS) || 1000;
+
 module.exports = {
   GRACE_PERIOD_MS,
   MAX_ROUTE_COORDS,
   MAX_MEMORY_COORDS,
   MAX_RETRIES,
   RETRY_INTERVAL_MS,
+  BROADCAST_INTERVAL_MS,
 };

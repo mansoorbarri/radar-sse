@@ -1,7 +1,5 @@
 const { aircraftMap, onlineAirports, getSubscribers } = require("../store");
-
-// Throttle settings
-const BROADCAST_INTERVAL_MS = 500; // Max one broadcast per 500ms
+const { BROADCAST_INTERVAL_MS } = require("../config");
 
 let broadcastPending = false;
 let _broadcastTimer = null; // Kept for potential future cancellation
@@ -10,6 +8,7 @@ let lastBroadcastTime = 0;
 // Track changed aircraft since last broadcast for delta updates
 const changedAircraft = new Set();
 const removedAircraft = new Set();
+let onlineAirportsChanged = false;
 
 function performBroadcast() {
   broadcastPending = false;
@@ -21,12 +20,17 @@ function performBroadcast() {
     // No subscribers, clear tracking
     changedAircraft.clear();
     removedAircraft.clear();
+    onlineAirportsChanged = false;
     return;
   }
 
   // Build delta message if we have tracked changes
   let message;
-  if (changedAircraft.size > 0 || removedAircraft.size > 0) {
+  if (
+    changedAircraft.size > 0 ||
+    removedAircraft.size > 0 ||
+    onlineAirportsChanged
+  ) {
     const changed = [];
     for (const id of changedAircraft) {
       const aircraft = aircraftMap.get(id);
@@ -35,14 +39,19 @@ function performBroadcast() {
       }
     }
 
-    message = JSON.stringify({
+    const payload = {
       type: "delta",
       count: aircraftMap.size,
       aircraft: changed,
       removed: Array.from(removedAircraft),
-      onlineAirports: Array.from(onlineAirports.values()),
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    if (onlineAirportsChanged) {
+      payload.onlineAirports = Array.from(onlineAirports.values());
+    }
+
+    message = JSON.stringify(payload);
   } else {
     // Full update (fallback, shouldn't normally happen after init)
     message = JSON.stringify({
@@ -59,6 +68,7 @@ function performBroadcast() {
   // Clear tracking after broadcast
   changedAircraft.clear();
   removedAircraft.clear();
+  onlineAirportsChanged = false;
 }
 
 // Schedule a broadcast (throttled)
@@ -92,6 +102,10 @@ function markAircraftRemoved(id) {
   changedAircraft.delete(id);
 }
 
+function markOnlineAirportsChanged() {
+  onlineAirportsChanged = true;
+}
+
 // Send full state to a new subscriber
 function sendFullState(res) {
   const message = JSON.stringify({
@@ -108,5 +122,6 @@ module.exports = {
   broadcast,
   markAircraftChanged,
   markAircraftRemoved,
+  markOnlineAirportsChanged,
   sendFullState,
 };
