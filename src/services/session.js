@@ -3,6 +3,7 @@ const { MAX_ROUTE_COORDS, MAX_RETRIES, RETRY_INTERVAL_MS } = require("../config"
 const { flightSessions, disconnectedSessions } = require("../store");
 const { downsampleRoute } = require("../utils/route");
 const { createLogger } = require("../utils/logger");
+const { clearPersistedFlightSession } = require("./session-persistence");
 
 const log = createLogger("session");
 
@@ -69,6 +70,7 @@ async function finalizeFlight(id, isRetry = false) {
         endTime: endTime,
         ...getSystemSecretArgs(),
       });
+      await clearPersistedFlightSession(session.convexUserId);
       log.info(isRetry ? "Saved active flight after retry" : "Saved active flight", {
         aircraftId: id,
         flightNo: session.flightNo,
@@ -84,6 +86,7 @@ async function finalizeFlight(id, isRetry = false) {
         routePoints: session.coords.length,
         minimumRoutePoints: 3,
       });
+      await clearPersistedFlightSession(session.convexUserId);
     }
     flightSessions.delete(id);
     return { success: true };
@@ -175,6 +178,7 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
         endTime: endTime,
         ...getSystemSecretArgs(),
       });
+      await clearPersistedFlightSession(session.convexUserId);
       log.info(isRetry ? "Saved disconnected flight after retry" : "Saved disconnected flight", {
         convexUserId,
         originalAircraftId: data.originalId,
@@ -190,6 +194,7 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
         routePoints: session.coords.length,
         minimumRoutePoints: 3,
       });
+      await clearPersistedFlightSession(session.convexUserId);
     }
     disconnectedSessions.delete(convexUserId);
     return { success: true };
