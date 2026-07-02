@@ -78,7 +78,10 @@ async function gracefulShutdown(signal) {
   });
   persistFlightSessions();
   persistOnlineAirports();
-  await persistFlightSessionsToConvex(`shutdown:${signal}`);
+  await persistFlightSessionsToConvex(`shutdown:${signal}`, {
+    throwOnError: true,
+    waitForInFlight: true,
+  });
   log.info("State persisted; exiting", {
     signal,
   });

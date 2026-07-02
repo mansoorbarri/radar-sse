@@ -12,7 +12,7 @@ const { createLogger } = require("../utils/logger");
 const log = createLogger("session-persistence");
 
 let persistTimer = null;
-let persistInFlight = false;
+let persistInFlightPromise = null;
 
 function getSystemSecretArgs() {
   return process.env.CONVEX_SYSTEM_SECRET
@@ -85,11 +85,18 @@ function buildPersistedSessions() {
   return Array.from(byUserId.values());
 }
 
-async function persistFlightSessionsToConvex(reason = "interval") {
-  if (persistInFlight) return;
+async function persistFlightSessionsToConvex(reason = "interval", options = {}) {
+  const { throwOnError = false, waitForInFlight = false } = options;
 
-  persistInFlight = true;
-  try {
+  if (persistInFlightPromise) {
+    if (!waitForInFlight) {
+      return persistInFlightPromise.catch(() => {});
+    }
+
+    await persistInFlightPromise.catch(() => {});
+  }
+
+  const currentPersistPromise = (async () => {
     const sessions = buildPersistedSessions();
     const result = await convex.mutation("activeFlightSessions:replaceAll", {
       sessions,
@@ -103,6 +110,11 @@ async function persistFlightSessionsToConvex(reason = "interval") {
         deleted: result.deleted,
       });
     }
+  })();
+  persistInFlightPromise = currentPersistPromise;
+
+  try {
+    await currentPersistPromise;
   } catch (error) {
     log.error("Failed to checkpoint flight sessions to Convex", {
       reason,
@@ -110,8 +122,13 @@ async function persistFlightSessionsToConvex(reason = "interval") {
       disconnectedSessions: disconnectedSessions.size,
       error,
     });
+    if (throwOnError) {
+      throw error;
+    }
   } finally {
-    persistInFlight = false;
+    if (persistInFlightPromise === currentPersistPromise) {
+      persistInFlightPromise = null;
+    }
   }
 }
 
@@ -151,6 +168,7 @@ async function restoreFlightSessionsFromConvex() {
     log.error("Failed to restore flight sessions from Convex", {
       error,
     });
+    throw error;
   }
 }
 
@@ -176,6 +194,7 @@ async function clearPersistedFlightSession(userId) {
       userId,
       error,
     });
+    throw error;
   }
 }
 
