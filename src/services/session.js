@@ -3,6 +3,7 @@ const { MAX_ROUTE_COORDS, MAX_RETRIES, RETRY_INTERVAL_MS } = require("../config"
 const { flightSessions, disconnectedSessions } = require("../store");
 const { downsampleRoute } = require("../utils/route");
 const { createLogger } = require("../utils/logger");
+const { clearPersistedFlightSession } = require("./session-persistence");
 
 const log = createLogger("session");
 
@@ -29,6 +30,15 @@ function getSessionDurationMs(session, endTime) {
   return Math.max(0, endTime - startTime - pausedDurationMs);
 }
 
+function getFlightDedupeKey(session) {
+  const startTime =
+    session?.startTime instanceof Date
+      ? session.startTime.getTime()
+      : new Date(session?.startTime).getTime();
+
+  return `${session.convexUserId}:${startTime}`;
+}
+
 async function finalizeFlight(id, isRetry = false) {
   const session = flightSessions.get(id);
   if (!session) return { success: false, reason: "no_session" };
@@ -44,7 +54,7 @@ async function finalizeFlight(id, isRetry = false) {
       const duration = getSessionDurationMs(session, endTime);
       if (!session.endTime) session.endTime = endTime; // Preserve original end time for retries
       const routeData = downsampleRoute(session.coords, MAX_ROUTE_COORDS);
-      if (session.coords.length > MAX_ROUTE_COORDS) {
+      if (!session.finalizedFlightSaved && session.coords.length > MAX_ROUTE_COORDS) {
         log.info("Downsampled route before saving active flight", {
           aircraftId: id,
           flightNo: session.flightNo,
@@ -53,22 +63,34 @@ async function finalizeFlight(id, isRetry = false) {
           maxRouteCoords: MAX_ROUTE_COORDS,
         });
       }
-      await convex.mutation("flights:create", {
-        userId: session.convexUserId,
-        callsign: session.flightNo,
-        aircraftType: session.aircraftType,
-        depICAO: session.departure,
-        arrICAO: session.arrival,
-        squawk: session.squawk || undefined,
-        duration,
-        maxAltitude: session.maxAltitude || undefined,
-        maxSpeed: session.maxSpeed || undefined,
-        statsExcludedReason: session.statsExcludedReason || undefined,
-        routeData: routeData,
-        startTime: session.startTime.getTime(),
-        endTime: endTime,
-        ...getSystemSecretArgs(),
-      });
+      if (!session.finalizedFlightSaved) {
+        await convex.mutation("flights:create", {
+          userId: session.convexUserId,
+          callsign: session.flightNo,
+          aircraftType: session.aircraftType,
+          depICAO: session.departure,
+          arrICAO: session.arrival,
+          squawk: session.squawk || undefined,
+          duration,
+          maxAltitude: session.maxAltitude || undefined,
+          maxSpeed: session.maxSpeed || undefined,
+          statsExcludedReason: session.statsExcludedReason || undefined,
+          routeData: routeData,
+          startTime: session.startTime.getTime(),
+          endTime: endTime,
+          dedupeKey: getFlightDedupeKey(session),
+          ...getSystemSecretArgs(),
+        });
+        session.finalizedFlightSaved = true;
+      } else {
+        log.info("Active flight already saved; retrying persisted checkpoint clear", {
+          aircraftId: id,
+          flightNo: session.flightNo,
+          convexUserId: session.convexUserId,
+          retryCount: session.retryCount,
+        });
+      }
+      await clearPersistedFlightSession(session.convexUserId);
       log.info(isRetry ? "Saved active flight after retry" : "Saved active flight", {
         aircraftId: id,
         flightNo: session.flightNo,
@@ -84,6 +106,7 @@ async function finalizeFlight(id, isRetry = false) {
         routePoints: session.coords.length,
         minimumRoutePoints: 3,
       });
+      await clearPersistedFlightSession(session.convexUserId);
     }
     flightSessions.delete(id);
     return { success: true };
@@ -149,7 +172,7 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
       const duration = getSessionDurationMs(session, endTime);
       if (!data.endTime) data.endTime = endTime; // Preserve original end time for retries
       const routeData = downsampleRoute(session.coords, MAX_ROUTE_COORDS);
-      if (session.coords.length > MAX_ROUTE_COORDS) {
+      if (!session.finalizedFlightSaved && session.coords.length > MAX_ROUTE_COORDS) {
         log.info("Downsampled route before saving disconnected flight", {
           convexUserId,
           originalAircraftId: data.originalId,
@@ -159,22 +182,34 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
           maxRouteCoords: MAX_ROUTE_COORDS,
         });
       }
-      await convex.mutation("flights:create", {
-        userId: session.convexUserId,
-        callsign: session.flightNo,
-        aircraftType: session.aircraftType,
-        depICAO: session.departure,
-        arrICAO: session.arrival,
-        squawk: session.squawk || undefined,
-        duration,
-        maxAltitude: session.maxAltitude || undefined,
-        maxSpeed: session.maxSpeed || undefined,
-        statsExcludedReason: session.statsExcludedReason || undefined,
-        routeData: routeData,
-        startTime: session.startTime.getTime(),
-        endTime: endTime,
-        ...getSystemSecretArgs(),
-      });
+      if (!session.finalizedFlightSaved) {
+        await convex.mutation("flights:create", {
+          userId: session.convexUserId,
+          callsign: session.flightNo,
+          aircraftType: session.aircraftType,
+          depICAO: session.departure,
+          arrICAO: session.arrival,
+          squawk: session.squawk || undefined,
+          duration,
+          maxAltitude: session.maxAltitude || undefined,
+          maxSpeed: session.maxSpeed || undefined,
+          statsExcludedReason: session.statsExcludedReason || undefined,
+          routeData: routeData,
+          startTime: session.startTime.getTime(),
+          endTime: endTime,
+          dedupeKey: getFlightDedupeKey(session),
+          ...getSystemSecretArgs(),
+        });
+        session.finalizedFlightSaved = true;
+      } else {
+        log.info("Disconnected flight already saved; retrying persisted checkpoint clear", {
+          convexUserId,
+          originalAircraftId: data.originalId,
+          flightNo: session.flightNo,
+          retryCount: data.retryCount,
+        });
+      }
+      await clearPersistedFlightSession(session.convexUserId);
       log.info(isRetry ? "Saved disconnected flight after retry" : "Saved disconnected flight", {
         convexUserId,
         originalAircraftId: data.originalId,
@@ -190,6 +225,7 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
         routePoints: session.coords.length,
         minimumRoutePoints: 3,
       });
+      await clearPersistedFlightSession(session.convexUserId);
     }
     disconnectedSessions.delete(convexUserId);
     return { success: true };

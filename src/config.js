@@ -14,6 +14,10 @@ const RETRY_INTERVAL_MS = 30000; // 30 seconds
 // Maximum SSE broadcast frequency. Higher values reduce network egress.
 const BROADCAST_INTERVAL_MS = Number(process.env.BROADCAST_INTERVAL_MS) || 1000;
 
+// How often to checkpoint in-memory flight sessions to Convex.
+const FLIGHT_SESSION_PERSIST_INTERVAL_MS =
+  Number(process.env.FLIGHT_SESSION_PERSIST_INTERVAL_MS) || 30000;
+
 module.exports = {
   GRACE_PERIOD_MS,
   MAX_ROUTE_COORDS,
@@ -21,4 +25,5 @@ module.exports = {
   MAX_RETRIES,
   RETRY_INTERVAL_MS,
   BROADCAST_INTERVAL_MS,
+  FLIGHT_SESSION_PERSIST_INTERVAL_MS,
 };
