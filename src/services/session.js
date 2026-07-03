@@ -30,6 +30,15 @@ function getSessionDurationMs(session, endTime) {
   return Math.max(0, endTime - startTime - pausedDurationMs);
 }
 
+function getFlightDedupeKey(session) {
+  const startTime =
+    session?.startTime instanceof Date
+      ? session.startTime.getTime()
+      : new Date(session?.startTime).getTime();
+
+  return `${session.convexUserId}:${startTime}`;
+}
+
 async function finalizeFlight(id, isRetry = false) {
   const session = flightSessions.get(id);
   if (!session) return { success: false, reason: "no_session" };
@@ -69,6 +78,7 @@ async function finalizeFlight(id, isRetry = false) {
           routeData: routeData,
           startTime: session.startTime.getTime(),
           endTime: endTime,
+          dedupeKey: getFlightDedupeKey(session),
           ...getSystemSecretArgs(),
         });
         session.finalizedFlightSaved = true;
@@ -187,6 +197,7 @@ async function finalizeDisconnectedSession(convexUserId, isRetry = false) {
           routeData: routeData,
           startTime: session.startTime.getTime(),
           endTime: endTime,
+          dedupeKey: getFlightDedupeKey(session),
           ...getSystemSecretArgs(),
         });
         session.finalizedFlightSaved = true;

@@ -46,10 +46,33 @@ app.use("/api/airport-online", airportsOnlineRouter);
 app.use("/api/airport-offline", airportsOfflineRouter);
 
 const PORT = process.env.PORT || 3001;
+const SHUTDOWN_PERSIST_TIMEOUT_MS = 10000;
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
 
 async function startServer() {
-  await restoreFlightSessionsFromConvex();
-  await persistFlightSessionsToConvex("startup");
+  let restoredFromConvex = true;
+  try {
+    await restoreFlightSessionsFromConvex();
+  } catch (error) {
+    restoredFromConvex = false;
+    log.error("Continuing startup after flight session restore failed", {
+      error,
+    });
+  }
+
+  if (restoredFromConvex) {
+    await persistFlightSessionsToConvex("startup");
+  }
 
   // Start background tasks after persisted sessions are restored.
   startAllTasks();
@@ -78,10 +101,14 @@ async function gracefulShutdown(signal) {
   });
   persistFlightSessions();
   persistOnlineAirports();
-  await persistFlightSessionsToConvex(`shutdown:${signal}`, {
-    throwOnError: true,
-    waitForInFlight: true,
-  });
+  await withTimeout(
+    persistFlightSessionsToConvex(`shutdown:${signal}`, {
+      throwOnError: true,
+      waitForInFlight: true,
+    }),
+    SHUTDOWN_PERSIST_TIMEOUT_MS,
+    `Timed out persisting flight sessions during ${signal}`,
+  );
   log.info("State persisted; exiting", {
     signal,
   });

@@ -70,6 +70,7 @@ function buildPersistedSessions() {
 
   for (const [userId, data] of disconnectedSessions) {
     if (!data?.session) continue;
+    if (byUserId.has(userId)) continue;
 
     byUserId.set(userId, {
       userId,
