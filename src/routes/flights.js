@@ -13,6 +13,10 @@ function normalizeFlightIdentifier(value) {
   return typeof value === "string" ? value.trim().toUpperCase() : "";
 }
 
+function didFinalize(result) {
+  return result?.success === true;
+}
+
 async function findUserByGoogleId(googleId) {
   if (!googleId) return null;
 
@@ -422,8 +426,7 @@ router.post("/end-flight", async (req, res) => {
       convexUserId: session.convexUserId,
       matchBy: "aircraftId",
     });
-    await finalizeFlight(id);
-    finalized = true;
+    finalized = didFinalize(await finalizeFlight(id));
   }
 
   // If not found by ID, try to find by googleId in active sessions
@@ -444,8 +447,7 @@ router.post("/end-flight", async (req, res) => {
               googleId,
               matchBy: "googleId",
             });
-            await finalizeFlight(aircraftId);
-            finalized = true;
+            finalized = didFinalize(await finalizeFlight(aircraftId));
             break;
           }
         } catch (e) {
@@ -471,8 +473,7 @@ router.post("/end-flight", async (req, res) => {
           convexUserId,
           matchBy: "originalAircraftId",
         });
-        await finalizeDisconnectedSession(convexUserId);
-        finalized = true;
+        finalized = didFinalize(await finalizeDisconnectedSession(convexUserId));
         break;
       }
     }
@@ -492,8 +493,7 @@ router.post("/end-flight", async (req, res) => {
           googleId,
           matchBy: "googleId",
         });
-        await finalizeDisconnectedSession(user._id);
-        finalized = true;
+        finalized = didFinalize(await finalizeDisconnectedSession(user._id));
       }
     } catch (e) {
       log.error("Failed to look up user while ending disconnected flight", {
