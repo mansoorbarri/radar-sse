@@ -25,14 +25,30 @@ const {
 const app = express();
 const log = createLogger("server");
 
+const allowedExactOrigins = new Set([
+  "https://radarthing.com",
+  "https://vstrips.xyzmani.com",
+  "http://localhost:3000",
+]);
+const allowedOriginPatterns = [/^https?:\/\/([a-z0-9-]+\.)?geo-fs\.com$/i];
+
+function isAllowedCorsOrigin(origin) {
+  if (!origin) return true;
+  return (
+    allowedExactOrigins.has(origin) ||
+    allowedOriginPatterns.some((pattern) => pattern.test(origin))
+  );
+}
+
 app.use(cors({
-  origin: [
-    "https://www.geo-fs.com",
-    "https://beta.geo-fs.com",
-    "https://radarthing.com",
-    "https://vstrips.xyzmani.com",
-    "http://localhost:3000",
-  ],
+  origin(origin, callback) {
+    if (isAllowedCorsOrigin(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error(`Origin not allowed by CORS: ${origin}`));
+  },
 }));
 app.use(express.json());
 
