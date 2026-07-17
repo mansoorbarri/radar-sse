@@ -1,4 +1,4 @@
-const { GRACE_PERIOD_MS } = require("../config");
+const { AIRCRAFT_STALE_TIMEOUT_MS, GRACE_PERIOD_MS } = require("../config");
 const {
   aircraftMap,
   flightSessions,
@@ -20,7 +20,7 @@ function startTimeoutCheck() {
     let hasRemovals = false;
 
     for (const [id, aircraft] of aircraftMap.entries()) {
-      if (now - (aircraft.ts || 0) > 30000) {
+      if (now - (aircraft.ts || 0) > AIRCRAFT_STALE_TIMEOUT_MS) {
         const session = flightSessions.get(id);
         if (session) {
           log.info("Aircraft disconnected; moving flight session to disconnected pool", {
@@ -29,6 +29,7 @@ function startTimeoutCheck() {
             convexUserId: session.convexUserId,
             lastSeenAt: aircraft.ts || null,
             ageMs: now - (aircraft.ts || 0),
+            staleTimeoutMs: AIRCRAFT_STALE_TIMEOUT_MS,
             resumableWindowMs: GRACE_PERIOD_MS,
           });
           // Move to disconnected sessions instead of finalizing.
@@ -39,6 +40,7 @@ function startTimeoutCheck() {
             aircraftId: id,
             lastSeenAt: aircraft.ts || null,
             ageMs: now - (aircraft.ts || 0),
+            staleTimeoutMs: AIRCRAFT_STALE_TIMEOUT_MS,
           });
         }
         markAircraftRemoved(id);

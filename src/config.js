@@ -1,6 +1,11 @@
 // How long to keep an unexpectedly disconnected flight resumable.
 const GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
 
+// How long an aircraft can go without a position update before it is removed
+// from live traffic and its flight session is parked for resume.
+const AIRCRAFT_STALE_TIMEOUT_MS =
+  Number(process.env.AIRCRAFT_STALE_TIMEOUT_MS) || 2 * 60 * 1000;
+
 // Maximum coordinates to store (Convex array limit is 8192)
 const MAX_ROUTE_COORDS = 8000;
 
@@ -19,6 +24,7 @@ const FLIGHT_SESSION_PERSIST_INTERVAL_MS =
   Number(process.env.FLIGHT_SESSION_PERSIST_INTERVAL_MS) || 30000;
 
 module.exports = {
+  AIRCRAFT_STALE_TIMEOUT_MS,
   GRACE_PERIOD_MS,
   MAX_ROUTE_COORDS,
   MAX_MEMORY_COORDS,
