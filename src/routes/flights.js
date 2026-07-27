@@ -1,7 +1,13 @@
 const express = require("express");
 const { convex } = require("../db");
 const { GRACE_PERIOD_MS, MAX_RETRIES } = require("../config");
-const { aircraftMap, flightSessions, disconnectedSessions, commandQueue } = require("../store");
+const {
+  aircraftMap,
+  flightSessions,
+  disconnectedSessions,
+  commandQueue,
+  clearFlightIdentity,
+} = require("../store");
 const { broadcast, markAircraftRemoved } = require("../services/broadcast");
 const { finalizeFlight, finalizeDisconnectedSession } = require("../services/session");
 const { createLogger } = require("../utils/logger");
@@ -508,6 +514,7 @@ router.post("/end-flight", async (req, res) => {
     markAircraftRemoved(id);
     aircraftMap.delete(id);
     commandQueue.delete(id);
+    clearFlightIdentity(id);
     broadcast();
   }
 
