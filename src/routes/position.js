@@ -9,6 +9,7 @@ const {
   setCachedUser,
   getFlightIdentity,
   setFlightIdentity,
+  clearFlightIdentity,
 } = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { downsampleRoute } = require("../utils/route");
@@ -291,6 +292,63 @@ function updateSessionMetadata(session, data) {
   }
 }
 
+function createFlightSession(data, receivedAt, convexUserId = null) {
+  const lat = Number(data.lat);
+  const lon = Number(data.lon);
+  const initialSpeedKts = getReportedSpeedKts(data) || 0;
+  return {
+    convexUserId,
+    googleId: data.googleId ? String(data.googleId) : null,
+    callsign: data.callsign || "Unknown",
+    flightNo: data.flightNo || "Unknown",
+    aircraftType: data.type || "Unknown",
+    departure: data.departure || "???",
+    arrival: data.arrival || "???",
+    squawk: data.squawk || null,
+    af: data.af || "",
+    nextWaypoint: data.nextWaypoint || null,
+    takeoffTime: data.takeoffTime || "",
+    maxAltitude: data.altMSL || 0,
+    maxSpeed: initialSpeedKts,
+    statsExcludedReason:
+      initialSpeedKts > getStatsMaxSpeedKts(data.type)
+        ? STATS_EXCLUDED_SPEED_REASON
+        : undefined,
+    coords: isValidCoordinate(lat, lon) ? [[lat, lon]] : [],
+    lastCoord: isValidCoordinate(lat, lon) ? [lat, lon] : null,
+    lastCoordAt: receivedAt,
+    endTime: receivedAt,
+    pausedDurationMs: 0,
+    startTime: new Date(),
+  };
+}
+
+function mergePendingSession(restored, pending) {
+  for (const coord of pending.coords || []) {
+    const last = restored.coords[restored.coords.length - 1];
+    if (!last || Math.abs(last[0] - coord[0]) > 0.0002 || Math.abs(last[1] - coord[1]) > 0.0002) {
+      restored.coords.push(coord);
+    }
+  }
+  restored.lastCoord = pending.lastCoord || restored.lastCoord;
+  restored.lastCoordAt = Math.max(
+    Number(restored.lastCoordAt) || 0,
+    Number(pending.lastCoordAt) || 0,
+  );
+  restored.endTime = Math.max(
+    Number(restored.endTime) || 0,
+    Number(pending.endTime) || 0,
+  );
+  restored.maxAltitude = Math.max(
+    Number(restored.maxAltitude) || 0,
+    Number(pending.maxAltitude) || 0,
+  );
+  restored.maxSpeed = Math.max(
+    Number(restored.maxSpeed) || 0,
+    Number(pending.maxSpeed) || 0,
+  );
+}
+
 function resolveFlightIdentity(aircraftId, googleId) {
   const searchId = String(googleId);
   const cachedUser = getCachedUser(searchId);
@@ -338,14 +396,9 @@ function resolveFlightIdentity(aircraftId, googleId) {
     .catch((error) => {
       const current = getFlightIdentity(aircraftId, searchId);
       if (current?.pending) {
-        setFlightIdentity(aircraftId, {
-          googleId: searchId,
-          user: null,
-          role: "FREE",
-          convexUserId: null,
-        });
+        clearFlightIdentity(aircraftId);
       }
-      log.error("Failed to resolve flight identity; defaulting to FREE role", {
+      log.error("Failed to resolve flight identity; will retry on the next position update", {
         aircraftId,
         googleId: searchId,
         error,
@@ -381,11 +434,13 @@ router.post("/", async (req, res) => {
       user,
     });
 
-    // Log flights for ALL signed-in users (viewing history is restricted in frontend)
-    if (convexUserId) {
+    // Track every signed-in flight immediately. Identity enrichment can finish
+    // later without losing the first position, start time, or speed samples.
+    if (data.googleId) {
       // Restore a disconnected session when the pilot explicitly claims it or
-      // when the continued leg is clearly the same flight.
-      if (!flightSessions.has(data.id) && disconnectedSessions.has(convexUserId)) {
+      // when the continued leg is clearly the same flight. This requires a
+      // resolved Convex user ID; pending sessions are reconciled below.
+      if (!flightSessions.has(data.id) && convexUserId && disconnectedSessions.has(convexUserId)) {
         const disconnected = disconnectedSessions.get(convexUserId);
         const { session, originalId, resumeApprovedForId } = disconnected;
         const autoResume = shouldAutoResumeSession(
@@ -436,72 +491,41 @@ router.post("/", async (req, res) => {
             disconnectedTakeoffTime: normalizeSessionTimestamp(session.takeoffTime),
             convexUserId,
           });
-          const lat = Number(data.lat);
-          const lon = Number(data.lon);
-          const initialSpeedKts = getReportedSpeedKts(data) || 0;
-          flightSessions.set(data.id, {
-            convexUserId: convexUserId,
-            callsign: data.callsign || "Unknown",
-            flightNo: data.flightNo || "Unknown",
-            aircraftType: data.type || "Unknown",
-            departure: data.departure || "???",
-            arrival: data.arrival || "???",
-            squawk: data.squawk || null,
-            af: data.af || "",
-            nextWaypoint: data.nextWaypoint || null,
-            takeoffTime: data.takeoffTime || "",
-            maxAltitude: data.altMSL || 0,
-            maxSpeed: initialSpeedKts,
-            statsExcludedReason:
-              initialSpeedKts > getStatsMaxSpeedKts(data.type)
-                ? STATS_EXCLUDED_SPEED_REASON
-                : undefined,
-            coords:
-              isValidCoordinate(lat, lon) ? [[lat, lon]] : [],
-            lastCoord:
-              isValidCoordinate(lat, lon) ? [lat, lon] : null,
-            lastCoordAt: receivedAt,
-            endTime: receivedAt,
-            pausedDurationMs: 0,
-            startTime: new Date(),
-          });
+          flightSessions.set(data.id, createFlightSession(data, receivedAt, convexUserId));
         }
       } else if (!flightSessions.has(data.id)) {
-        // New flight session
-        const lat = Number(data.lat);
-        const lon = Number(data.lon);
-        const initialSpeedKts = getReportedSpeedKts(data) || 0;
-        flightSessions.set(data.id, {
-          convexUserId: convexUserId,
-          callsign: data.callsign || "Unknown",
-          flightNo: data.flightNo || "Unknown",
-          aircraftType: data.type || "Unknown",
-          departure: data.departure || "???",
-          arrival: data.arrival || "???",
-          squawk: data.squawk || null,
-          af: data.af || "",
-          nextWaypoint: data.nextWaypoint || null,
-          takeoffTime: data.takeoffTime || "",
-          maxAltitude: data.altMSL || 0,
-          maxSpeed: initialSpeedKts,
-          statsExcludedReason:
-            initialSpeedKts > getStatsMaxSpeedKts(data.type)
-              ? STATS_EXCLUDED_SPEED_REASON
-              : undefined,
-          coords:
-            isValidCoordinate(lat, lon) ? [[lat, lon]] : [],
-          lastCoord:
-            isValidCoordinate(lat, lon) ? [lat, lon] : null,
-          lastCoordAt: receivedAt,
-          endTime: receivedAt,
-          pausedDurationMs: 0,
-          startTime: new Date(),
-        });
+        flightSessions.set(data.id, createFlightSession(data, receivedAt, convexUserId));
       } else {
         // Existing active session - add coordinates and update max values
         const session = flightSessions.get(data.id);
-        updateSessionPosition(session, data, receivedAt);
-        updateSessionMetadata(session, data);
+        if (convexUserId && !session.convexUserId) {
+          const disconnected = disconnectedSessions.get(convexUserId);
+          const isApprovedResume =
+            typeof disconnected?.resumeApprovedForId === "string" &&
+            disconnected.resumeApprovedForId === data.id;
+          if (disconnected && (isApprovedResume || shouldAutoResumeSession(disconnected, data, receivedAt))) {
+            const restored = disconnected.session;
+            mergePendingSession(restored, session);
+            restored.convexUserId = convexUserId;
+            restored.googleId = String(data.googleId);
+            restored.pausedDurationMs =
+              (Number(restored.pausedDurationMs) || 0) +
+              Math.max(0, receivedAt - (Number(disconnected.disconnectedAt) || receivedAt));
+            flightSessions.set(data.id, restored);
+            disconnectedSessions.delete(convexUserId);
+            updateSessionPosition(restored, data, receivedAt);
+            updateSessionMetadata(restored, data);
+          } else {
+            session.convexUserId = convexUserId;
+            session.googleId = String(data.googleId);
+            updateSessionPosition(session, data, receivedAt);
+            updateSessionMetadata(session, data);
+          }
+        } else {
+          if (convexUserId) session.convexUserId = convexUserId;
+          updateSessionPosition(session, data, receivedAt);
+          updateSessionMetadata(session, data);
+        }
       }
     }
 
