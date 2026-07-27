@@ -16,7 +16,14 @@ router.get("/", (req, res) => {
   const id = Date.now();
   addSubscriber({ id, res });
 
+  // Keep-alive ping to detect broken/half-open TCP sockets instantly
+  const keepAlive = setInterval(() => {
+    res.write(": ping\n\n");
+  }, 15000);
+
+  // Clean up timer and subscriber when connection drops
   req.on("close", () => {
+    clearInterval(keepAlive);
     removeSubscriber(id);
   });
 });
