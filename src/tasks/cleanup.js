@@ -4,6 +4,7 @@ const {
   flightSessions,
   disconnectedSessions,
   commandQueue,
+  clearFlightIdentity,
   parkDisconnectedSession,
 } = require("../store");
 const { finalizeDisconnectedSession } = require("../services/session");
@@ -46,6 +47,7 @@ function startTimeoutCheck() {
         markAircraftRemoved(id);
         aircraftMap.delete(id);
         commandQueue.delete(id); // Clean up stale commands
+        clearFlightIdentity(id);
         hasRemovals = true;
       }
     }

@@ -373,6 +373,11 @@ const IMAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes for image checks
 // Caches users:getByGoogleId results to avoid per-position-update queries
 const userCache = new Map();
 
+// Identity resolved for an aircraft's current connection. Unlike userCache this
+// has no TTL: role/profile data only needs to be resolved once per flight.
+// Entries are removed when that aircraft's flight ends or times out.
+const flightIdentityCache = new Map();
+
 // Approved image cache: "airlineCode-aircraftType" -> { exists: boolean, timestamp }
 // Caches aircraftImages:getApprovedImage results
 const approvedImageCache = new Map();
@@ -404,6 +409,20 @@ function setCachedUser(googleId, user) {
     convexUserId: user?._id || null,
     timestamp: Date.now(),
   });
+}
+
+function getFlightIdentity(aircraftId, googleId) {
+  const cached = flightIdentityCache.get(aircraftId);
+  if (!cached || cached.googleId !== googleId) return undefined;
+  return cached;
+}
+
+function setFlightIdentity(aircraftId, identity) {
+  flightIdentityCache.set(aircraftId, identity);
+}
+
+function clearFlightIdentity(aircraftId) {
+  flightIdentityCache.delete(aircraftId);
 }
 
 /**
@@ -468,6 +487,10 @@ module.exports = {
   // User cache
   getCachedUser,
   setCachedUser,
+  // Per-flight identity cache
+  getFlightIdentity,
+  setFlightIdentity,
+  clearFlightIdentity,
   // Approved image cache
   getCachedApprovedImage,
   setCachedApprovedImage,

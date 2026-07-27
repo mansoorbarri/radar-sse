@@ -7,6 +7,8 @@ const {
   disconnectedSessions,
   getCachedUser,
   setCachedUser,
+  getFlightIdentity,
+  setFlightIdentity,
 } = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { downsampleRoute } = require("../utils/route");
@@ -289,6 +291,68 @@ function updateSessionMetadata(session, data) {
   }
 }
 
+function resolveFlightIdentity(aircraftId, googleId) {
+  const searchId = String(googleId);
+  const cachedUser = getCachedUser(searchId);
+  if (cachedUser) {
+    setFlightIdentity(aircraftId, { googleId: searchId, ...cachedUser });
+    return;
+  }
+
+  // Identity enrichment must never delay the real-time position response.
+  // Keep the promise in the per-flight cache so repeated position updates do
+  // not start duplicate Convex requests while the first lookup is pending.
+  setFlightIdentity(aircraftId, { googleId: searchId, pending: true });
+  void convex
+    .query("users:getByGoogleId", { googleId: searchId })
+    .then((user) => {
+      const identity = {
+        user,
+        role: user?.role || "FREE",
+        convexUserId: user?._id || null,
+      };
+      setCachedUser(searchId, user);
+      const current = getFlightIdentity(aircraftId, searchId);
+      if (current?.pending) {
+        setFlightIdentity(aircraftId, { googleId: searchId, ...identity });
+      }
+
+      const authIdentity = buildAuthLogIdentity({
+        aircraft: { id: aircraftId },
+        user,
+        googleId: searchId,
+      });
+      log.info(
+        user
+          ? "Resolved authenticated user for flight identity"
+          : "No user found for flight identity; defaulting to FREE role",
+        {
+          aircraftId,
+          googleId: searchId,
+          convexUserId: identity.convexUserId,
+          role: identity.role,
+          identity: authIdentity,
+        },
+      );
+    })
+    .catch((error) => {
+      const current = getFlightIdentity(aircraftId, searchId);
+      if (current?.pending) {
+        setFlightIdentity(aircraftId, {
+          googleId: searchId,
+          user: null,
+          role: "FREE",
+          convexUserId: null,
+        });
+      }
+      log.error("Failed to resolve flight identity; defaulting to FREE role", {
+        aircraftId,
+        googleId: searchId,
+        error,
+      });
+    });
+}
+
 router.post("/", async (req, res) => {
   const data = req.body;
   if (data.id) {
@@ -300,67 +364,15 @@ router.post("/", async (req, res) => {
 
     if (data.googleId) {
       const searchId = String(data.googleId);
-
-      // Check cache first to avoid Convex query
-      const cached = getCachedUser(searchId);
-      if (cached) {
-        user = cached.user;
-        role = cached.role;
-        convexUserId = cached.convexUserId;
-        // Only log occasionally to reduce noise (cache hits are frequent)
-      } else {
-        // Cache miss - query Convex and cache the result
-        try {
-          user = await convex.query("users:getByGoogleId", {
-            googleId: searchId,
-          });
-
-          // Cache the result (even if null - prevents repeated lookups for unknown users)
-          setCachedUser(searchId, user);
-
-          if (user) {
-            role = user.role;
-            convexUserId = user._id;
-            const authIdentity = buildAuthLogIdentity({
-              aircraft: data,
-              user,
-              googleId: searchId,
-            });
-            log.info("Resolved authenticated user for position update", {
-              aircraftId: data.id,
-              callsign: data.callsign,
-              flightNo: data.flightNo,
-              googleId: searchId,
-              convexUserId,
-              role,
-              identity: authIdentity,
-            });
-          } else {
-            // Explicitly default to FREE when user not found
-            role = "FREE";
-            const authIdentity = buildAuthLogIdentity({
-              aircraft: data,
-              googleId: searchId,
-            });
-            log.info("No user found for position update; defaulting to FREE role", {
-              aircraftId: data.id,
-              callsign: data.callsign,
-              flightNo: data.flightNo,
-              googleId: searchId,
-              identity: authIdentity,
-            });
-          }
-        } catch (e) {
-          // On DB error, also default to FREE (don't cache errors)
-          role = "FREE";
-          log.error("Failed to resolve user for position update; defaulting to FREE role", {
-            aircraftId: data.id,
-            callsign: data.callsign,
-            flightNo: data.flightNo,
-            googleId: searchId,
-            error: e,
-          });
-        }
+      let identity = getFlightIdentity(data.id, searchId);
+      if (!identity) {
+        resolveFlightIdentity(data.id, searchId);
+        identity = getFlightIdentity(data.id, searchId);
+      }
+      if (!identity?.pending) {
+        user = identity?.user || null;
+        role = identity?.role || "FREE";
+        convexUserId = identity?.convexUserId || null;
       }
     }
 
