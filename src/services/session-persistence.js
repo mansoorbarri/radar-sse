@@ -1,6 +1,8 @@
+const { randomUUID } = require("node:crypto");
 const { convex } = require("../db");
 const {
   FLIGHT_SESSION_PERSIST_INTERVAL_MS,
+  FLIGHT_ROUTE_MAX_CHUNKS,
 } = require("../config");
 const {
   flightSessions,
@@ -14,6 +16,11 @@ const log = createLogger("session-persistence");
 let persistTimer = null;
 let persistInFlightPromise = null;
 
+// What Convex already holds for each user's route, so checkpoints only send
+// the coords added since. Positions push onto session.coords in place;
+// downsampling and session merges assign a new array, which forces a resend.
+const persistedRoutes = new Map();
+
 function getSystemSecretArgs() {
   return process.env.CONVEX_SYSTEM_SECRET
     ? { systemSecret: process.env.CONVEX_SYSTEM_SECRET }
@@ -21,8 +28,9 @@ function getSystemSecretArgs() {
 }
 
 function serializeSession(session) {
+  const { coords: _coords, ...rest } = session;
   return {
-    ...session,
+    ...rest,
     startTime:
       session.startTime instanceof Date
         ? session.startTime.toISOString()
@@ -53,37 +61,94 @@ function getSessionDisconnectedAt(session, fallback = Date.now()) {
   return disconnectedAt > 0 ? disconnectedAt : fallback;
 }
 
+function buildRoute(userId, session) {
+  const coords = Array.isArray(session.coords) ? session.coords : [];
+  const previous = persistedRoutes.get(userId);
+  const canAppend =
+    previous &&
+    previous.coordsRef === coords &&
+    coords.length >= previous.count &&
+    (previous.count === 0 ||
+      coords[previous.count - 1] === previous.lastCoordRef) &&
+    previous.chunks < FLIGHT_ROUTE_MAX_CHUNKS;
+
+  const route = canAppend
+    ? {
+        version: previous.version,
+        startIndex: previous.count,
+        coords: coords.slice(previous.count),
+      }
+    : { version: randomUUID(), startIndex: 0, coords: coords.slice() };
+  const count = route.startIndex + route.coords.length;
+  const addedChunk = route.coords.length > 0 ? 1 : 0;
+
+  return {
+    route,
+    // Applied only once Convex accepts the checkpoint.
+    nextState: {
+      version: route.version,
+      coordsRef: coords,
+      count,
+      lastCoordRef: count > 0 ? coords[count - 1] : undefined,
+      chunks: canAppend ? previous.chunks + addedChunk : addedChunk,
+    },
+  };
+}
+
 function buildPersistedSessions() {
   const byUserId = new Map();
+  const nextRouteStates = new Map();
+
+  const add = (userId, entry, session) => {
+    const { route, nextState } = buildRoute(userId, session);
+    byUserId.set(userId, { ...entry, route });
+    nextRouteStates.set(userId, nextState);
+  };
 
   for (const [aircraftId, session] of flightSessions) {
     if (!session?.convexUserId) continue;
 
-    byUserId.set(session.convexUserId, {
-      userId: session.convexUserId,
-      state: "active",
-      originalId: String(aircraftId),
-      session: serializeSession(session),
-      disconnectedAt: getSessionDisconnectedAt(session),
-    });
+    add(
+      session.convexUserId,
+      {
+        userId: session.convexUserId,
+        state: "active",
+        originalId: String(aircraftId),
+        session: serializeSession(session),
+        disconnectedAt: getSessionDisconnectedAt(session),
+      },
+      session,
+    );
   }
 
   for (const [userId, data] of disconnectedSessions) {
     if (!data?.session) continue;
     if (byUserId.has(userId)) continue;
 
-    byUserId.set(userId, {
+    add(
       userId,
-      state: "disconnected",
-      originalId: String(data.originalId || userId),
-      session: serializeSession(data.session),
-      disconnectedAt:
-        Number(data.disconnectedAt) ||
-        getSessionDisconnectedAt(data.session),
-    });
+      {
+        userId,
+        state: "disconnected",
+        originalId: String(data.originalId || userId),
+        session: serializeSession(data.session),
+        disconnectedAt:
+          Number(data.disconnectedAt) ||
+          getSessionDisconnectedAt(data.session),
+      },
+      data.session,
+    );
   }
 
-  return Array.from(byUserId.values());
+  return { sessions: Array.from(byUserId.values()), nextRouteStates };
+}
+
+function applyPersistedRouteStates(nextRouteStates, resyncUserIds = []) {
+  const resync = new Set(resyncUserIds);
+  persistedRoutes.clear();
+  for (const [userId, state] of nextRouteStates) {
+    if (!resync.has(userId)) persistedRoutes.set(userId, state);
+  }
 }
 
 async function persistFlightSessionsToConvex(reason = "interval", options = {}) {
@@ -98,17 +163,19 @@ async function persistFlightSessionsToConvex(reason = "interval", options = {}) 
   }
 
   const currentPersistPromise = (async () => {
-    const sessions = buildPersistedSessions();
+    const { sessions, nextRouteStates } = buildPersistedSessions();
     const result = await convex.mutation("activeFlightSessions:replaceAll", {
       sessions,
       ...getSystemSecretArgs(),
     });
+    applyPersistedRouteStates(nextRouteStates, result.resync);
 
     if (sessions.length > 0 || result.deleted > 0) {
       log.info("Checkpointed flight sessions to Convex", {
         reason,
         saved: result.saved,
         deleted: result.deleted,
+        resync: result.resync?.length || 0,
       });
     }
   })();
@@ -142,6 +209,15 @@ async function restoreFlightSessionsFromConvex() {
     const restoredUserIds = [];
     for (const persisted of persistedSessions) {
       const session = hydrateSession(persisted.session, persisted.userId);
+      if (persisted.routeVersion) {
+        const coords = await convex.query("activeFlightSessions:getRoute", {
+          userId: persisted.userId,
+          ...getSystemSecretArgs(),
+        });
+        session.coords = Array.isArray(coords) ? coords : [];
+      } else if (!Array.isArray(session.coords)) {
+        session.coords = [];
+      }
       const disconnectedAt =
         Number(persisted.disconnectedAt) ||
         getSessionDisconnectedAt(session, Number(persisted.updatedAt) || Date.now());
@@ -184,6 +260,7 @@ function startFlightSessionPersistence() {
 
 async function clearPersistedFlightSession(userId) {
   if (!userId) return;
+  persistedRoutes.delete(userId);
 
   try {
     await convex.mutation("activeFlightSessions:clear", {

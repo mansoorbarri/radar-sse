@@ -23,6 +23,10 @@ const BROADCAST_INTERVAL_MS = Number(process.env.BROADCAST_INTERVAL_MS) || 1000;
 const FLIGHT_SESSION_PERSIST_INTERVAL_MS =
   Number(process.env.FLIGHT_SESSION_PERSIST_INTERVAL_MS) || 30000;
 
+// Checkpoints append new route points as small chunks. After this many
+// chunks the route is resent whole so restores stay cheap.
+const FLIGHT_ROUTE_MAX_CHUNKS = 40;
+
 module.exports = {
   AIRCRAFT_STALE_TIMEOUT_MS,
   GRACE_PERIOD_MS,
@@ -32,4 +36,5 @@ module.exports = {
   RETRY_INTERVAL_MS,
   BROADCAST_INTERVAL_MS,
   FLIGHT_SESSION_PERSIST_INTERVAL_MS,
+  FLIGHT_ROUTE_MAX_CHUNKS,
 };
