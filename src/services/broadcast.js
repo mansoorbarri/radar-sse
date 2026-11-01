@@ -10,6 +10,29 @@ const changedAircraft = new Set();
 const removedAircraft = new Set();
 let onlineAirportsChanged = false;
 
+// Flight plans are several KB of JSON each, rarely change, and were ~90% of
+// stream egress. Deltas only carry an aircraft's flightPlan when it differs
+// from what every subscriber last received; clients keep the previous value
+// when the key is absent.
+const lastBroadcastFlightPlan = new Map();
+
+// Clients may send the plan as an object or array, which is a new value on
+// every request, so compare by content. Serializing strings too keeps a
+// string and an object with the same JSON distinct.
+function flightPlanKey(flightPlan) {
+  return JSON.stringify(flightPlan ?? null);
+}
+
+function withoutUnchangedFlightPlan(aircraft) {
+  const key = flightPlanKey(aircraft.flightPlan);
+  if (lastBroadcastFlightPlan.get(aircraft.id) === key) {
+    const { flightPlan: _unchanged, ...rest } = aircraft;
+    return rest;
+  }
+  lastBroadcastFlightPlan.set(aircraft.id, key);
+  return { ...aircraft, flightPlan: aircraft.flightPlan ?? null };
+}
+
 function performBroadcast() {
   broadcastPending = false;
   _broadcastTimer = null;
@@ -19,6 +42,7 @@ function performBroadcast() {
   if (subscribers.length === 0) {
     // No subscribers, clear tracking
     changedAircraft.clear();
+    lastBroadcastFlightPlan.clear();
     removedAircraft.clear();
     onlineAirportsChanged = false;
     return;
@@ -35,8 +59,11 @@ function performBroadcast() {
     for (const id of changedAircraft) {
       const aircraft = aircraftMap.get(id);
       if (aircraft) {
-        changed.push(aircraft);
+        changed.push(withoutUnchangedFlightPlan(aircraft));
       }
+    }
+    for (const id of removedAircraft) {
+      lastBroadcastFlightPlan.delete(id);
     }
 
     const payload = {
@@ -108,6 +135,17 @@ function markOnlineAirportsChanged() {
 
 // Send full state to a new subscriber
 function sendFullState(send) {
+  // The snapshot may hold a flight plan that existing subscribers haven't
+  // received yet. Forget it so the next delta sends it to everyone, keeping
+  // all subscribers in agreement.
+  for (const aircraft of aircraftMap.values()) {
+    if (
+      lastBroadcastFlightPlan.get(aircraft.id) !==
+      flightPlanKey(aircraft.flightPlan)
+    ) {
+      lastBroadcastFlightPlan.delete(aircraft.id);
+    }
+  }
   const message = JSON.stringify({
     type: "full",
     count: aircraftMap.size,
