@@ -20,10 +20,7 @@ const {
   getSessionDeparture,
   getSessionArrival,
 } = require("../utils/session-match");
-const {
-  buildAircraftDisplayFields,
-  buildAuthLogIdentity,
-} = require("../utils/display");
+const { buildAuthLogIdentity } = require("../utils/display");
 const { createLogger } = require("../utils/logger");
 
 const router = express.Router();
@@ -37,6 +34,38 @@ const MAX_REASONABLE_REPORTED_SPEED_KTS = 3000;
 const MAX_REASONABLE_OBSERVED_SPEED_KTS = 3000;
 const MAX_SHORT_INTERVAL_JUMP_NM = 1;
 const AUTO_RESUME_FALLBACK_WINDOW_MS = 15 * 60 * 1000;
+
+// Every stored aircraft is sent to every SSE viewer about once a second, so
+// only forward the fields RadarThing reads instead of the whole request body.
+const BROADCAST_AIRCRAFT_FIELDS = [
+  "id",
+  "googleId",
+  "source",
+  "trafficSource",
+  "callsign",
+  "type",
+  "alt",
+  "altMSL",
+  "heading",
+  "speed",
+  "groundSpeed",
+  "flightNo",
+  "departure",
+  "arrival",
+  "takeoffTime",
+  "squawk",
+  "af",
+  "flightPlan",
+  "vspeed",
+  "nextWaypoint",
+  "distanceLeft",
+  "navMode",
+  "speedMode",
+  "flapsPosition",
+  "flapsMaxPosition",
+];
+// 5 decimal places is about 1 m, well below what the radar can draw.
+const BROADCAST_COORD_PRECISION = 1e5;
 
 function isHighPerformanceStatsAircraft(aircraftType) {
   const normalized = String(aircraftType || "").trim().toUpperCase();
@@ -174,6 +203,24 @@ function shouldAutoResumeSession(disconnected, data, receivedAt) {
     );
 
   return hasMatchingRouteMetadata;
+}
+
+function roundBroadcastCoord(value) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? Math.round(number * BROADCAST_COORD_PRECISION) / BROADCAST_COORD_PRECISION
+    : value;
+}
+
+function buildBroadcastAircraft(data, receivedAt) {
+  const aircraft = {};
+  for (const field of BROADCAST_AIRCRAFT_FIELDS) {
+    if (data[field] !== undefined) aircraft[field] = data[field];
+  }
+  aircraft.lat = roundBroadcastCoord(data.lat);
+  aircraft.lon = roundBroadcastCoord(data.lon);
+  aircraft.ts = receivedAt;
+  return aircraft;
 }
 
 // Add coordinate to session with memory limit enforcement
@@ -410,10 +457,7 @@ router.post("/", async (req, res) => {
   const data = req.body;
   if (data.id) {
     const receivedAt = Date.now();
-    let role = "FREE"; // Default to FREE
-    const airlineLogo = null;
     let convexUserId = null;
-    let user = null;
 
     if (data.googleId) {
       const searchId = String(data.googleId);
@@ -423,16 +467,9 @@ router.post("/", async (req, res) => {
         identity = getFlightIdentity(data.id, searchId);
       }
       if (!identity?.pending) {
-        user = identity?.user || null;
-        role = identity?.role || "FREE";
         convexUserId = identity?.convexUserId || null;
       }
     }
-
-    const displayFields = buildAircraftDisplayFields({
-      aircraft: data,
-      user,
-    });
 
     // Track every signed-in flight immediately. Identity enrichment can finish
     // later without losing the first position, start time, or speed samples.
@@ -529,13 +566,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    aircraftMap.set(data.id, {
-      ...data,
-      ...displayFields,
-      role,
-      airlineLogo,
-      ts: receivedAt,
-    });
+    aircraftMap.set(data.id, buildBroadcastAircraft(data, receivedAt));
     markAircraftChanged(data.id);
     broadcast();
 

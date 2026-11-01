@@ -63,7 +63,7 @@ function performBroadcast() {
     });
   }
 
-  subscribers.forEach((s) => s.res.write(`data: ${message}\n\n`));
+  subscribers.forEach((s) => s.send(message));
 
   // Clear tracking after broadcast
   changedAircraft.clear();
@@ -107,7 +107,7 @@ function markOnlineAirportsChanged() {
 }
 
 // Send full state to a new subscriber
-function sendFullState(res) {
+function sendFullState(send) {
   const message = JSON.stringify({
     type: "full",
     count: aircraftMap.size,
@@ -115,7 +115,7 @@ function sendFullState(res) {
     onlineAirports: Array.from(onlineAirports.values()),
     timestamp: new Date().toISOString(),
   });
-  res.write(`data: ${message}\n\n`);
+  send(message);
 }
 
 module.exports = {

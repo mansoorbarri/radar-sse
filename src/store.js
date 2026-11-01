@@ -14,7 +14,7 @@ const log = createLogger("store");
 // Current aircraft positions: id -> aircraft_data
 const aircraftMap = new Map();
 
-// SSE client connections: Array<{id, res}>
+// SSE client connections: Array<{id, send}>
 let subscribers = [];
 
 // Active flight recordings: id -> session
