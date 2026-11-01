@@ -1,5 +1,6 @@
 const express = require("express");
 const { aircraftMap, commandQueue } = require("../store");
+const { takeQueuedCommands } = require("../services/commands");
 const { createLogger } = require("../utils/logger");
 
 const router = express.Router();
@@ -50,22 +51,10 @@ router.post("/", (req, res) => {
   res.json({ success: true, queueLength: commands.length });
 });
 
-// Fetch pending commands for an aircraft (called from userscript)
+// Fetch pending commands for an aircraft (polled by userscripts that predate
+// receiving commands in the position response)
 router.get("/:id", (req, res) => {
-  const { id } = req.params;
-  const commands = commandQueue.get(id) || [];
-
-  // Clear the queue after fetching
-  if (commands.length > 0) {
-    commandQueue.delete(id);
-    log.info("Delivered queued aircraft commands", {
-      aircraftId: id,
-      deliveredCommands: commands.length,
-      commandTypes: commands.map((command) => command.type),
-    });
-  }
-
-  res.json({ commands });
+  res.json({ commands: takeQueuedCommands(req.params.id, "poll") });
 });
 
 module.exports = router;

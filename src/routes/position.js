@@ -12,6 +12,7 @@ const {
   clearFlightIdentity,
 } = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
+const { takeQueuedCommands } = require("../services/commands");
 const { downsampleRoute } = require("../utils/route");
 const {
   normalizeSessionField,
@@ -65,7 +66,7 @@ const BROADCAST_AIRCRAFT_FIELDS = [
   "flapsMaxPosition",
 ];
 // 5 decimal places is about 1 m, well below what the radar can draw.
-const BROADCAST_COORD_PRECISION = 1e5;
+const COORD_PRECISION = 1e5;
 
 function isHighPerformanceStatsAircraft(aircraftType) {
   const normalized = String(aircraftType || "").trim().toUpperCase();
@@ -205,12 +206,12 @@ function shouldAutoResumeSession(disconnected, data, receivedAt) {
   return hasMatchingRouteMetadata;
 }
 
-function roundBroadcastCoord(value) {
+function roundCoord(value) {
   // Keep unknown coordinates unknown; Number(null) and Number("") are 0.
   if (value === null || value === "") return value;
   const number = Number(value);
   return Number.isFinite(number)
-    ? Math.round(number * BROADCAST_COORD_PRECISION) / BROADCAST_COORD_PRECISION
+    ? Math.round(number * COORD_PRECISION) / COORD_PRECISION
     : value;
 }
 
@@ -219,23 +220,24 @@ function buildBroadcastAircraft(data, receivedAt) {
   for (const field of BROADCAST_AIRCRAFT_FIELDS) {
     if (data[field] !== undefined) aircraft[field] = data[field];
   }
-  aircraft.lat = roundBroadcastCoord(data.lat);
-  aircraft.lon = roundBroadcastCoord(data.lon);
+  aircraft.lat = roundCoord(data.lat);
+  aircraft.lon = roundCoord(data.lon);
   aircraft.ts = receivedAt;
   return aircraft;
 }
 
-// Add coordinate to session with memory limit enforcement
+// Add coordinate to session with memory limit enforcement. Stored routes are
+// rounded like broadcasts, which halves route responses and checkpoints.
 function addCoordToSession(session, lat, lon) {
   const last = session.coords[session.coords.length - 1];
   if (!last) {
-    session.coords.push([lat, lon]);
+    session.coords.push([roundCoord(lat), roundCoord(lon)]);
     return;
   }
 
   // Only add if moved enough
   if (Math.abs(last[0] - lat) > 0.0002 || Math.abs(last[1] - lon) > 0.0002) {
-    session.coords.push([lat, lon]);
+    session.coords.push([roundCoord(lat), roundCoord(lon)]);
 
     // Downsample if exceeding memory limit
     if (session.coords.length > MAX_MEMORY_COORDS) {
@@ -363,7 +365,7 @@ function createFlightSession(data, receivedAt, convexUserId = null) {
       initialSpeedKts > getStatsMaxSpeedKts(data.type)
         ? STATS_EXCLUDED_SPEED_REASON
         : undefined,
-    coords: isValidCoordinate(lat, lon) ? [[lat, lon]] : [],
+    coords: isValidCoordinate(lat, lon) ? [[roundCoord(lat), roundCoord(lon)]] : [],
     lastCoord: isValidCoordinate(lat, lon) ? [lat, lon] : null,
     lastCoordAt: receivedAt,
     endTime: receivedAt,
@@ -572,6 +574,12 @@ router.post("/", async (req, res) => {
     markAircraftChanged(data.id);
     broadcast();
 
+    // Userscripts opt in with ?commands=1 to receive queued commands here
+    // instead of polling /api/commands. Older ones ignore this response body,
+    // so they keep getting commands from the poll.
+    if (req.query.commands === "1") {
+      return res.json({ commands: takeQueuedCommands(data.id, "position") });
+    }
   }
   res.sendStatus(200);
 });
