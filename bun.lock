@@ -5,7 +5,7 @@
     "": {
       "name": "geofs-radar-sse",
       "dependencies": {
-        "compression": "^1.8.1",
+        "compression": "^1.8.2",
         "convex": "^1.31.5",
         "cors": "^2.8.5",
         "dotenv": "^17.2.3",
