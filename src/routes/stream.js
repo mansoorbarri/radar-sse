@@ -75,8 +75,12 @@ router.get("/", (req, res) => {
   // Send full state on initial connection
   sendFullState(send);
 
+  // Clients that keep an aircraft's previous flightPlan when a delta omits it
+  // opt in with ?flightPlans=changed.
+  const omitsUnchangedFlightPlans = req.query.flightPlans === "changed";
+
   const id = Date.now();
-  addSubscriber({ id, send });
+  addSubscriber({ id, send, omitsUnchangedFlightPlans });
 
   res.on("close", () => {
     removeSubscriber(id);
