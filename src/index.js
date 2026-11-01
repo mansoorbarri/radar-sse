@@ -1,6 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const { createLogger } = require("./utils/logger");
 
 // Initialize DB connection (validates env vars)
@@ -49,7 +50,18 @@ app.use(cors({
 
     callback(new Error(`Origin not allowed by CORS: ${origin}`));
   },
+  // Let browsers reuse a preflight for 2 hours (Chrome's cap) instead of the
+  // 5 second default, which preflighted most userscript position POSTs.
+  maxAge: 7200,
 }));
+
+// Gzip JSON responses such as /api/active-flight-path. The SSE stream does its
+// own gzip with per-event flushes, so keep this middleware off it entirely.
+const compress = compression();
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/stream")) return next();
+  return compress(req, res, next);
+});
 app.use(express.json());
 
 // Mount routes
