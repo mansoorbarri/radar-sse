@@ -206,6 +206,8 @@ function shouldAutoResumeSession(disconnected, data, receivedAt) {
 }
 
 function roundBroadcastCoord(value) {
+  // Keep unknown coordinates unknown; Number(null) and Number("") are 0.
+  if (value === null || value === "") return value;
   const number = Number(value);
   return Number.isFinite(number)
     ? Math.round(number * BROADCAST_COORD_PRECISION) / BROADCAST_COORD_PRECISION
