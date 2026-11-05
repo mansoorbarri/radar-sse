@@ -33,8 +33,13 @@ const allowedExactOrigins = new Set([
 ]);
 const allowedOriginPatterns = [/^https?:\/\/([a-z0-9-]+\.)?geo-fs\.com$/i];
 
+// Some browser extensions rewrite Origin with a trailing slash or different
+// casing ("https://radarthing.com/"), which browsers never send themselves.
+function normalizeOrigin(origin) {
+  return String(origin).trim().replace(/\/+$/, "").toLowerCase();
+}
+
 function isAllowedCorsOrigin(origin) {
-  if (!origin) return true;
   return (
     allowedExactOrigins.has(origin) ||
     allowedOriginPatterns.some((pattern) => pattern.test(origin))
@@ -43,8 +48,16 @@ function isAllowedCorsOrigin(origin) {
 
 app.use(cors({
   origin(origin, callback) {
-    if (isAllowedCorsOrigin(origin)) {
+    if (!origin) {
       callback(null, true);
+      return;
+    }
+
+    // Echo the canonical origin: the browser checks the response against the
+    // page's real origin, not the header an extension rewrote.
+    const normalized = normalizeOrigin(origin);
+    if (isAllowedCorsOrigin(normalized)) {
+      callback(null, normalized);
       return;
     }
 
