@@ -9,6 +9,7 @@ const {
 } = require("../store");
 const { finalizeDisconnectedSession } = require("../services/session");
 const { broadcast, markAircraftRemoved } = require("../services/broadcast");
+const { pruneFlightAccessCache } = require("../services/flight-access");
 const { createLogger } = require("../utils/logger");
 
 const log = createLogger("cleanup");
@@ -19,6 +20,7 @@ function startTimeoutCheck() {
   setInterval(() => {
     const now = Date.now();
     let hasRemovals = false;
+    pruneFlightAccessCache(now);
 
     for (const [id, aircraft] of aircraftMap.entries()) {
       if (now - (aircraft.ts || 0) > AIRCRAFT_STALE_TIMEOUT_MS) {

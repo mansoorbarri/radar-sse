@@ -13,6 +13,10 @@ const {
 } = require("../store");
 const { broadcast, markAircraftChanged } = require("../services/broadcast");
 const { takeQueuedCommands } = require("../services/commands");
+const {
+  DENIED_MESSAGE,
+  canStartFlight,
+} = require("../services/flight-access");
 const { downsampleRoute } = require("../utils/route");
 const {
   normalizeSessionField,
@@ -457,9 +461,34 @@ function resolveFlightIdentity(aircraftId, googleId) {
     });
 }
 
+// A pilot coming back to a parked flight is resuming it, not starting one.
+function hasResumableSession(googleId) {
+  if (!googleId) return false;
+  const searchId = String(googleId);
+  const cachedUserId = getCachedUser(searchId)?.convexUserId;
+  if (cachedUserId && disconnectedSessions.has(cachedUserId)) return true;
+  for (const { session } of disconnectedSessions.values()) {
+    if (session?.googleId && String(session.googleId) === searchId) return true;
+  }
+  return false;
+}
+
 router.post("/", async (req, res) => {
   const data = req.body;
   if (data.id) {
+    // Only starting a flight is gated. An aircraft already on the radar keeps
+    // sending even if the event ends mid-flight, and resumes aren't gated.
+    const isLive = aircraftMap.has(data.id) || flightSessions.has(data.id);
+    if (!isLive && !hasResumableSession(data.googleId)) {
+      const allowed = await canStartFlight(data.googleId);
+      if (!allowed) {
+        return res.status(403).json({
+          error: "flight_start_denied",
+          message: DENIED_MESSAGE,
+        });
+      }
+    }
+
     const receivedAt = Date.now();
     let convexUserId = null;
 
